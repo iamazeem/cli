@@ -34,7 +34,7 @@ func NewCmdList(f *cmdutil.Factory, runF func(*ListOptions) error) *cobra.Comman
 		Use:   "list",
 		Short: "List GitHub deployment environments",
 		Example: heredoc.Doc(`
-			# List environments in the current repository
+			# List environments for the current repository
 			$ gh env list
 		`),
 		Aliases: []string{"ls"},
