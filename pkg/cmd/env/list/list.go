@@ -33,10 +33,10 @@ func NewCmdList(f *cmdutil.Factory, runF func(*ListOptions) error) *cobra.Comman
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List GitHub deployment environments",
-		Example: heredoc.Docf(`
+		Example: heredoc.Doc(`
 			# List environments in the current repository
 			$ gh env list
-		`, "`"),
+		`),
 		Aliases: []string{"ls"},
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

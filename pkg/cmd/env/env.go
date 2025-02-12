@@ -13,7 +13,7 @@ func NewCmdEnv(f *cmdutil.Factory, runF func(*EnvOptions) error) *cobra.Command 
 	cmd := &cobra.Command{
 		Use:   "env <command>",
 		Short: "Manage deployment environments",
-		Long: heredoc.Docf(`
+		Long: heredoc.Doc(`
 			Work with GitHub deployment environments.
 
 			To learn more about GitHub deployment environments, see
