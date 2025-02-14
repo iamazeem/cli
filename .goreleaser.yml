@@ -36,12 +36,13 @@ builds:
 
   - id: windows #build:windows
     goos: [windows]
-    goarch: [386, amd64, arm64]
-    hooks:
-      post:
-        - cmd: >-
-            {{ if eq .Runtime.Goos "windows" }}pwsh .\script\sign.ps1{{ else }}./script/sign{{ end }} '{{ .Path }}'
-          output: true
+    # goarch: [386, amd64, arm64]
+    goarch: [amd64]
+    # hooks:
+    #   post:
+    #     - cmd: >-
+    #         {{ if eq .Runtime.Goos "windows" }}pwsh .\script\sign.ps1{{ else }}./script/sign{{ end }} '{{ .Path }}'
+    #       output: true
     binary: bin/gh
     main: ./cmd/gh
     ldflags:
