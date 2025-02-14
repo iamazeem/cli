@@ -245,7 +245,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           path: |
-            dist/*.zip
             dist/*.msi
 
   # release:
