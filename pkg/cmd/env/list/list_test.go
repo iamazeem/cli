@@ -9,11 +9,28 @@ import (
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmd/env/shared"
 	"github.com/cli/cli/v2/pkg/cmdutil"
-	"github.com/cli/cli/v2/pkg/httpmock"
 	"github.com/cli/cli/v2/pkg/iostreams"
+	"github.com/cli/cli/v2/pkg/jsonfieldstest"
 	"github.com/google/shlex"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestJSONFields(t *testing.T) {
+	jsonfieldstest.ExpectCommandToSupportJSONFields(t, NewCmdList, []string{
+		"id",
+		"name",
+		"nodeId",
+		"url",
+		"htmlUrl",
+		"createdAt",
+		"updatedAt",
+		"canAdminBypass",
+		"protectionRules",
+		"protectedBranches",
+		"customBranchPolicies",
+	})
+}
 
 func TestNewCmdList(t *testing.T) {
 	tests := []struct {
@@ -45,75 +62,79 @@ func TestNewCmdList(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := &cmdutil.Factory{}
-			argv, err := shlex.Split(tt.input)
-			assert.NoError(t, err)
+			ios, _, _, _ := iostreams.Test()
+			f := &cmdutil.Factory{
+				IOStreams: ios,
+			}
+			f.HttpClient = func() (*http.Client, error) {
+				return &http.Client{}, nil
+			}
+
+			args, err := shlex.Split(tt.input)
+			require.NoError(t, err)
+
 			var gotOpts *ListOptions
 			cmd := NewCmdList(f, func(opts *ListOptions) error {
 				gotOpts = opts
 				return nil
 			})
-			cmd.SetArgs(argv)
+
+			cmd.SetArgs(args)
 			cmd.SetIn(&bytes.Buffer{})
 			cmd.SetOut(&bytes.Buffer{})
 			cmd.SetErr(&bytes.Buffer{})
 
 			_, err = cmd.ExecuteC()
 			if tt.wantsErr != "" {
-				assert.EqualError(t, err, tt.wantsErr)
-				return
+				require.EqualError(t, err, tt.wantsErr)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.wants.Limit, gotOpts.Limit)
 			}
-			assert.NoError(t, err)
-			assert.Equal(t, tt.wants.Limit, gotOpts.Limit)
 		})
 	}
 }
 
+type stubEnvironmentLister struct {
+	environments []shared.Environment
+	err          error
+}
+
+func (e stubEnvironmentLister) List(repo ghrepo.Interface, limit int, tty bool) ([]shared.Environment, error) {
+	return e.environments, e.err
+}
+
+type testEnvironmentClientListError struct{}
+
+func (e testEnvironmentClientListError) Error() string {
+	return "environment client list error"
+}
+
 func TestListRun(t *testing.T) {
 	tests := []struct {
-		name       string
-		opts       ListOptions
-		stubs      func(*httpmock.Registry)
-		tty        bool
-		wantErr    bool
-		wantErrMsg string
-		wantStderr string
-		wantStdout string
+		name        string
+		opts        *ListOptions
+		isTTY       bool
+		stubLister  stubEnvironmentLister
+		expectedErr error
+		wantStdout  string
+		wantStderr  string
 	}{
 		{
-			name: "displays results tty",
-			tty:  true,
-			stubs: func(reg *httpmock.Registry) {
-				reg.Register(
-					httpmock.REST("GET", "repos/OWNER/REPO/environments"),
-					httpmock.JSONResponse(shared.EnvironmentPayload{
-						Environments: []shared.Environment{
-							{
-								Name: "dev",
-							},
-							{
-								Name: "prod",
-							},
-						},
-						TotalCount: 2,
-					}),
-				)
-				reg.Register(
-					httpmock.REST("GET", "repos/OWNER/REPO/environments/dev/secrets"),
-					httpmock.StringResponse(`{"total_count":0}`),
-				)
-				reg.Register(
-					httpmock.REST("GET", "repos/OWNER/REPO/environments/prod/secrets"),
-					httpmock.StringResponse(`{"total_count":0}`),
-				)
-				reg.Register(
-					httpmock.REST("GET", "repos/OWNER/REPO/environments/dev/variables"),
-					httpmock.StringResponse(`{"total_count":0}`),
-				)
-				reg.Register(
-					httpmock.REST("GET", "repos/OWNER/REPO/environments/prod/variables"),
-					httpmock.StringResponse(`{"total_count":0}`),
-				)
+			name:  "list tty",
+			opts:  &ListOptions{},
+			isTTY: true,
+			stubLister: stubEnvironmentLister{
+				environments: []shared.Environment{
+					{
+						Id:   1,
+						Name: "dev",
+					},
+					{
+						Id:   1,
+						Name: "prod",
+					},
+				},
 			},
 			wantStdout: heredoc.Doc(`
 
@@ -123,87 +144,104 @@ func TestListRun(t *testing.T) {
 				dev   0                 0        0
 				prod  0                 0        0
 			`),
+			wantStderr: "",
 		},
 		{
-			name: "displays results non-tty",
-			tty:  false,
-			stubs: func(reg *httpmock.Registry) {
-				reg.Register(
-					httpmock.REST("GET", "repos/OWNER/REPO/environments"),
-					httpmock.JSONResponse(shared.EnvironmentPayload{
-						Environments: []shared.Environment{
-							{
-								Name: "dev",
-							},
-							{
-								Name: "prod",
-							},
-						},
-						TotalCount: 2,
-					}),
-				)
+			name: "list json",
+			opts: &ListOptions{
+				Exporter: func() cmdutil.Exporter {
+					exporter := cmdutil.NewJSONExporter()
+					exporter.SetFields([]string{"id", "name"})
+					return exporter
+				}(),
 			},
-			wantStdout: "dev\nprod\n",
+			isTTY: false,
+			stubLister: stubEnvironmentLister{
+				environments: []shared.Environment{
+					{
+						Id:   1,
+						Name: "dev",
+					},
+					{
+						Id:   1,
+						Name: "prod",
+					},
+				},
+			},
+			wantStdout: "[{\"id\":1,\"name\":\"dev\"},{\"id\":1,\"name\":\"prod\"}]\n",
+			wantStderr: "",
 		},
 		{
-			name: "displays no results when there is a tty",
-			tty:  true,
-			stubs: func(reg *httpmock.Registry) {
-				reg.Register(
-					httpmock.REST("GET", "repos/OWNER/REPO/environments"),
-					httpmock.JSONResponse(shared.EnvironmentPayload{
-						Environments: []shared.Environment{},
-						TotalCount:   0,
-					}),
-				)
+			name:  "list non-tty",
+			opts:  &ListOptions{},
+			isTTY: false,
+			stubLister: stubEnvironmentLister{
+				environments: []shared.Environment{
+					{
+						Id:   1,
+						Name: "dev",
+					},
+					{
+						Id:   1,
+						Name: "prod",
+					},
+				},
 			},
-			wantErr:    true,
-			wantErrMsg: "No environments found in OWNER/REPO",
+			wantStdout: heredoc.Doc(`
+				dev
+				prod
+			`),
+			wantStderr: "",
 		},
 		{
-			name: "displays list error",
-			stubs: func(reg *httpmock.Registry) {
-				reg.Register(
-					httpmock.REST("GET", "repos/OWNER/REPO/environments"),
-					httpmock.StatusStringResponse(404, "Not Found"),
-				)
+			name:  "no results",
+			opts:  &ListOptions{},
+			isTTY: true,
+			stubLister: stubEnvironmentLister{
+				environments: []shared.Environment{},
 			},
-			wantErr:    true,
-			wantErrMsg: "X Failed to get environments: HTTP 404 (https://api.github.com/repos/OWNER/REPO/environments?per_page=100)",
+			expectedErr: cmdutil.NewNoResultsError("No environments found in OWNER/REPO"),
+			wantStdout:  "",
+			wantStderr:  "",
+		},
+		{
+			name:  "client error",
+			opts:  &ListOptions{},
+			isTTY: true,
+			stubLister: stubEnvironmentLister{
+				environments: []shared.Environment{},
+				err:          testEnvironmentClientListError{},
+			},
+			expectedErr: testEnvironmentClientListError{},
+			wantStderr:  "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reg := &httpmock.Registry{}
-			if tt.stubs != nil {
-				tt.stubs(reg)
-			}
-			tt.opts.HttpClient = func() (*http.Client, error) {
-				return &http.Client{Transport: reg}, nil
-			}
 			ios, _, stdout, stderr := iostreams.Test()
-			ios.SetStdoutTTY(tt.tty)
-			ios.SetStdinTTY(tt.tty)
-			ios.SetStderrTTY(tt.tty)
-			tt.opts.IO = ios
-			tt.opts.BaseRepo = func() (ghrepo.Interface, error) {
-				return ghrepo.New("OWNER", "REPO"), nil
-			}
-			defer reg.Verify(t)
+			ios.SetStdoutTTY(tt.isTTY)
+			ios.SetStdinTTY(tt.isTTY)
+			ios.SetStderrTTY(tt.isTTY)
 
-			err := listRun(&tt.opts)
-			if tt.wantErr {
-				if tt.wantErrMsg != "" {
-					assert.EqualError(t, err, tt.wantErrMsg)
-				} else {
-					assert.Error(t, err)
-				}
+			opts := tt.opts
+			opts.IO = ios
+			opts.BaseRepo = func() (ghrepo.Interface, error) { return ghrepo.New("OWNER", "REPO"), nil }
+			opts.EnvironmentListClient = &tt.stubLister
+
+			err := listRun(opts)
+
+			if tt.expectedErr != nil {
+				require.Error(t, err)
+				require.ErrorIs(t, err, tt.expectedErr)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantStdout, stdout.String())
 			}
-			assert.Equal(t, tt.wantStdout, stdout.String())
-			assert.Equal(t, tt.wantStderr, stderr.String())
+
+			if tt.wantStderr != "" {
+				assert.Equal(t, tt.wantStderr, stderr.String())
+			}
 		})
 	}
 }

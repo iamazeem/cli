@@ -6,20 +6,6 @@ import (
 	"time"
 )
 
-var EnvironmentFields = []string{
-	"id",
-	"name",
-	"nodeId",
-	"url",
-	"htmlUrl",
-	"createdAt",
-	"updatedAt",
-	"canAdminBypass",
-	"protectionRules",
-	"protectedBranches",
-	"customBranchPolicies",
-}
-
 type Environment struct {
 	Id                     int                    `json:"id"`
 	NodeId                 string                 `json:"node_id"`
@@ -48,7 +34,20 @@ type DeploymentBranchPolicy struct {
 
 type EnvironmentPayload struct {
 	Environments []Environment `json:"environments"`
-	TotalCount   int           `json:"total_count"`
+}
+
+var EnvironmentFields = []string{
+	"id",
+	"name",
+	"nodeId",
+	"url",
+	"htmlUrl",
+	"createdAt",
+	"updatedAt",
+	"canAdminBypass",
+	"protectionRules",
+	"protectedBranches",
+	"customBranchPolicies",
 }
 
 func (e *Environment) ExportData(fields []string) map[string]interface{} {

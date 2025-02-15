@@ -36,8 +36,11 @@ func TestEnvironment_ExportData(t *testing.T) {
 		outputJSON string
 	}{
 		{
-			name:      "basic",
-			fields:    []string{"id", "name"},
+			name: "basic",
+			fields: []string{
+				"id",
+				"name",
+			},
 			inputJSON: src,
 			outputJSON: heredoc.Doc(`
 				{
@@ -47,8 +50,18 @@ func TestEnvironment_ExportData(t *testing.T) {
 			`),
 		},
 		{
-			name:      "full",
-			fields:    []string{"id", "name", "nodeId", "canAdminBypass", "protectionRules", "protectedBranches", "customBranchPolicies", "createdAt", "updatedAt"},
+			name: "full",
+			fields: []string{
+				"id",
+				"name",
+				"nodeId",
+				"canAdminBypass",
+				"protectionRules",
+				"protectedBranches",
+				"customBranchPolicies",
+				"createdAt",
+				"updatedAt",
+			},
 			inputJSON: src,
 			outputJSON: heredoc.Doc(`
 				{
