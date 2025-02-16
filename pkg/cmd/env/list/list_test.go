@@ -121,6 +121,28 @@ func TestListRun(t *testing.T) {
 		wantStderr  string
 	}{
 		{
+			name:  "client error",
+			opts:  &ListOptions{},
+			isTTY: true,
+			stubLister: stubEnvironmentLister{
+				environments: []shared.Environment{},
+				err:          testEnvironmentClientListError{},
+			},
+			expectedErr: testEnvironmentClientListError{},
+			wantStderr:  "",
+		},
+		{
+			name:  "no results",
+			opts:  &ListOptions{},
+			isTTY: true,
+			stubLister: stubEnvironmentLister{
+				environments: []shared.Environment{},
+			},
+			expectedErr: cmdutil.NewNoResultsError("No environments found in OWNER/REPO"),
+			wantStdout:  "",
+			wantStderr:  "",
+		},
+		{
 			name:  "list tty",
 			opts:  &ListOptions{},
 			isTTY: true,
@@ -147,31 +169,6 @@ func TestListRun(t *testing.T) {
 			wantStderr: "",
 		},
 		{
-			name: "list json",
-			opts: &ListOptions{
-				Exporter: func() cmdutil.Exporter {
-					exporter := cmdutil.NewJSONExporter()
-					exporter.SetFields([]string{"id", "name"})
-					return exporter
-				}(),
-			},
-			isTTY: false,
-			stubLister: stubEnvironmentLister{
-				environments: []shared.Environment{
-					{
-						Id:   1,
-						Name: "dev",
-					},
-					{
-						Id:   1,
-						Name: "prod",
-					},
-				},
-			},
-			wantStdout: "[{\"id\":1,\"name\":\"dev\"},{\"id\":1,\"name\":\"prod\"}]\n",
-			wantStderr: "",
-		},
-		{
 			name:  "list non-tty",
 			opts:  &ListOptions{},
 			isTTY: false,
@@ -194,26 +191,29 @@ func TestListRun(t *testing.T) {
 			wantStderr: "",
 		},
 		{
-			name:  "no results",
-			opts:  &ListOptions{},
-			isTTY: true,
-			stubLister: stubEnvironmentLister{
-				environments: []shared.Environment{},
+			name: "list json non-tty",
+			opts: &ListOptions{
+				Exporter: func() cmdutil.Exporter {
+					exporter := cmdutil.NewJSONExporter()
+					exporter.SetFields([]string{"id", "name"})
+					return exporter
+				}(),
 			},
-			expectedErr: cmdutil.NewNoResultsError("No environments found in OWNER/REPO"),
-			wantStdout:  "",
-			wantStderr:  "",
-		},
-		{
-			name:  "client error",
-			opts:  &ListOptions{},
-			isTTY: true,
+			isTTY: false,
 			stubLister: stubEnvironmentLister{
-				environments: []shared.Environment{},
-				err:          testEnvironmentClientListError{},
+				environments: []shared.Environment{
+					{
+						Id:   1,
+						Name: "dev",
+					},
+					{
+						Id:   1,
+						Name: "prod",
+					},
+				},
 			},
-			expectedErr: testEnvironmentClientListError{},
-			wantStderr:  "",
+			wantStdout: "[{\"id\":1,\"name\":\"dev\"},{\"id\":1,\"name\":\"prod\"}]\n",
+			wantStderr: "",
 		},
 	}
 

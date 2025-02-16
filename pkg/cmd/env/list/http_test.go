@@ -44,6 +44,11 @@ func TestEnvironmentLister_List(t *testing.T) {
 			},
 			status: http.StatusOK,
 		},
+		{
+			name:   "http 404 not found error",
+			repo:   ghrepo.New("OWNER", "REPO"),
+			status: http.StatusNotFound,
+		},
 	}
 
 	for _, tt := range tests {
@@ -59,8 +64,13 @@ func TestEnvironmentLister_List(t *testing.T) {
 				HTTPClient: &http.Client{Transport: reg},
 			}
 			environments, err := environmentLister.List(tt.repo, tt.limit, tt.tty)
-			require.NoError(t, err)
-			assert.Equal(t, tt.resp.Environments, environments)
+			if tt.status == http.StatusNotFound {
+				require.Error(t, err)
+				assert.Equal(t, "HTTP 404 (https://api.github.com/repos/OWNER/REPO/environments?per_page=100)", err.Error())
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.resp.Environments, environments)
+			}
 		})
 	}
 }

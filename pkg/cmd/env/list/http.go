@@ -14,8 +14,6 @@ type EnvironmentLister struct {
 }
 
 func (e *EnvironmentLister) List(repo ghrepo.Interface, limit int, isTTY bool) ([]shared.Environment, error) {
-	client := api.NewClientFromHTTP(e.HTTPClient)
-
 	path := fmt.Sprintf("repos/%s/environments", ghrepo.FullName(repo))
 
 	perPage := 100
@@ -23,6 +21,8 @@ func (e *EnvironmentLister) List(repo ghrepo.Interface, limit int, isTTY bool) (
 		perPage = limit
 	}
 	path += fmt.Sprintf("?per_page=%d", perPage)
+
+	client := api.NewClientFromHTTP(e.HTTPClient)
 
 	var environments []shared.Environment
 pagination:
