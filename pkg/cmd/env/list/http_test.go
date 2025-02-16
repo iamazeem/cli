@@ -14,18 +14,18 @@ import (
 
 func TestEnvironmentLister_List(t *testing.T) {
 	tests := []struct {
-		name   string
-		repo   ghrepo.Interface
-		limit  int
-		tty    bool
-		resp   shared.EnvironmentPayload
-		status int
+		name        string
+		repo        ghrepo.Interface
+		resp        shared.EnvironmentPayload
+		status      int
+		expectedErr error
 	}{
 		{
-			name:   "no environments",
-			repo:   ghrepo.New("OWNER", "REPO"),
-			resp:   shared.EnvironmentPayload{},
-			status: http.StatusOK,
+			name:        "no environments",
+			repo:        ghrepo.New("OWNER", "REPO"),
+			resp:        shared.EnvironmentPayload{},
+			status:      http.StatusOK,
+			expectedErr: nil,
 		},
 		{
 			name: "two environments",
@@ -42,12 +42,15 @@ func TestEnvironmentLister_List(t *testing.T) {
 					},
 				},
 			},
-			status: http.StatusOK,
+			status:      http.StatusOK,
+			expectedErr: nil,
 		},
 		{
-			name:   "http 404 not found error",
-			repo:   ghrepo.New("OWNER", "REPO"),
-			status: http.StatusNotFound,
+			name:        "http 404 not found error",
+			repo:        ghrepo.New("OWNER", "REPO"),
+			resp:        shared.EnvironmentPayload{},
+			status:      http.StatusNotFound,
+			expectedErr: fmt.Errorf("HTTP 404 (https://api.github.com/repos/OWNER/REPO/environments?per_page=100)"),
 		},
 	}
 
@@ -63,10 +66,10 @@ func TestEnvironmentLister_List(t *testing.T) {
 			environmentLister := &EnvironmentLister{
 				HTTPClient: &http.Client{Transport: reg},
 			}
-			environments, err := environmentLister.List(tt.repo, tt.limit, tt.tty)
-			if tt.status == http.StatusNotFound {
+			environments, err := environmentLister.List(tt.repo, 100, false)
+			if err != nil {
 				require.Error(t, err)
-				assert.Equal(t, "HTTP 404 (https://api.github.com/repos/OWNER/REPO/environments?per_page=100)", err.Error())
+				require.Equal(t, tt.expectedErr.Error(), err.Error())
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, tt.resp.Environments, environments)
