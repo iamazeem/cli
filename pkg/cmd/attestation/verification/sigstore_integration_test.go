@@ -48,20 +48,22 @@ func TestLiveSigstoreVerifier(t *testing.T) {
 	}
 
 	for _, tc := range testcases {
-		verifier := NewLiveSigstoreVerifier(SigstoreConfig{
-			Logger: io.NewTestHandler(),
+		t.Run(tc.name, func(t *testing.T) {
+			verifier := NewLiveSigstoreVerifier(SigstoreConfig{
+				Logger: io.NewTestHandler(),
+			})
+
+			results, err := verifier.Verify(tc.attestations, publicGoodPolicy(t))
+
+			if tc.expectErr {
+				require.Error(t, err)
+				require.ErrorContains(t, err, tc.errContains)
+				require.Nil(t, results)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, len(tc.attestations), len(results))
+			}
 		})
-
-		results, err := verifier.Verify(tc.attestations, publicGoodPolicy(t))
-
-		if tc.expectErr {
-			require.Error(t, err, "test case: %s", tc.name)
-			require.ErrorContains(t, err, tc.errContains, "test case: %s", tc.name)
-			require.Nil(t, results, "test case: %s", tc.name)
-		} else {
-			require.Equal(t, len(tc.attestations), len(results), "test case: %s", tc.name)
-			require.NoError(t, err, "test case: %s", tc.name)
-		}
 	}
 
 	t.Run("with 2/3 verified attestations", func(t *testing.T) {
