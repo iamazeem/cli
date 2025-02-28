@@ -14,6 +14,7 @@ import (
 	"github.com/cli/cli/v2/internal/ghrepo"
 	workflowShared "github.com/cli/cli/v2/pkg/cmd/workflow/shared"
 	"github.com/cli/cli/v2/pkg/iostreams"
+	"github.com/enescakir/emoji"
 )
 
 type Prompter interface {
@@ -143,7 +144,7 @@ type Commit struct {
 // Title is the display title for a run, falling back to the commit subject if unavailable
 func (r Run) Title() string {
 	if r.DisplayTitle != "" {
-		return r.DisplayTitle
+		return emoji.Parse(r.DisplayTitle)
 	}
 
 	commitLines := strings.Split(r.HeadCommit.Message, "\n")
@@ -173,6 +174,8 @@ func (r *Run) ExportData(fields []string) map[string]interface{} {
 		switch f {
 		case "databaseId":
 			data[f] = r.ID
+		case "displayTitle":
+			data[f] = r.Title()
 		case "workflowDatabaseId":
 			data[f] = r.WorkflowID
 		case "workflowName":
