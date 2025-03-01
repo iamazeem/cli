@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/MakeNowJust/heredoc"
+	"github.com/cli/cli/v2/internal/browser"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/internal/tableprinter"
 	"github.com/cli/cli/v2/internal/text"
@@ -21,14 +22,17 @@ type ListOptions struct {
 	BaseRepo              func() (ghrepo.Interface, error)
 	IO                    *iostreams.IOStreams
 	Exporter              cmdutil.Exporter
+	Browser               browser.Browser
 	EnvironmentListClient EnvironmentListClient
 
 	Limit int
+	Web   bool
 }
 
 func NewCmdList(f *cmdutil.Factory, runF func(*ListOptions) error) *cobra.Command {
 	opts := ListOptions{
-		IO: f.IOStreams,
+		IO:      f.IOStreams,
+		Browser: f.Browser,
 	}
 
 	cmd := &cobra.Command{
@@ -62,26 +66,38 @@ func NewCmdList(f *cmdutil.Factory, runF func(*ListOptions) error) *cobra.Comman
 	}
 
 	cmd.Flags().IntVarP(&opts.Limit, "limit", "L", 30, "Maximum number of environments to fetch")
+	cmd.Flags().BoolVarP(&opts.Web, "web", "w", false, "Open environments in the browser")
+
 	cmdutil.AddJSONFlags(cmd, &opts.Exporter, shared.EnvironmentFields)
 
 	return cmd
 }
 
 func listRun(opts *ListOptions) error {
-	repo, err := opts.BaseRepo()
+	baseRepo, err := opts.BaseRepo()
 	if err != nil {
 		return err
 	}
 
+	if opts.Web {
+		envListUrl := ghrepo.GenerateRepoURL(baseRepo, "settings/environments")
+
+		if opts.IO.IsStdoutTTY() {
+			fmt.Fprintf(opts.IO.Out, "Opening %s in your browser.\n", text.DisplayURL(envListUrl))
+		}
+
+		return opts.Browser.Browse(envListUrl)
+	}
+
 	opts.IO.StartProgressIndicator()
-	environments, err := opts.EnvironmentListClient.List(repo, opts.Limit, opts.IO.IsStdoutTTY())
+	environments, err := opts.EnvironmentListClient.List(baseRepo, opts.Limit, opts.IO.IsStdoutTTY())
 	opts.IO.StopProgressIndicator()
 	if err != nil {
 		return fmt.Errorf("%s Failed to get environments: %w", opts.IO.ColorScheme().FailureIcon(), err)
 	}
 
 	if len(environments) == 0 && opts.Exporter == nil {
-		return cmdutil.NewNoResultsError(fmt.Sprintf("No environments found in %s", ghrepo.FullName(repo)))
+		return cmdutil.NewNoResultsError(fmt.Sprintf("No environments found in %s", ghrepo.FullName(baseRepo)))
 	}
 
 	if err := opts.IO.StartPager(); err == nil {
@@ -95,7 +111,7 @@ func listRun(opts *ListOptions) error {
 	}
 
 	if opts.IO.IsStdoutTTY() {
-		fmt.Fprintf(opts.IO.Out, "\nShowing %d of %s in %s\n\n", len(environments), text.Pluralize(len(environments), "environment"), ghrepo.FullName(repo))
+		fmt.Fprintf(opts.IO.Out, "\nShowing %d of %s in %s\n\n", len(environments), text.Pluralize(len(environments), "environment"), ghrepo.FullName(baseRepo))
 		tp := tableprinter.New(opts.IO, tableprinter.WithHeader("NAME", "PROTECTION RULES", "SECRETS", "VARIABLES"))
 		for _, environment := range environments {
 			tp.AddField(environment.Name)

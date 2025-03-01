@@ -58,6 +58,14 @@ func TestNewCmdList(t *testing.T) {
 			input:    "-L 0",
 			wantsErr: "invalid limit: 0",
 		},
+		{
+			name:  "with web",
+			input: "--web",
+			wants: ListOptions{
+				Limit: 30,
+				Web:   true,
+			},
+		},
 	}
 
 	for _, tt := range tests {
