@@ -27,6 +27,7 @@ type CloneOptions struct {
 	GitArgs      []string
 	Repository   string
 	UpstreamName string
+	NoUpstream   bool
 }
 
 func NewCmdClone(f *cmdutil.Factory, runF func(*CloneOptions) error) *cobra.Command {
@@ -40,7 +41,7 @@ func NewCmdClone(f *cmdutil.Factory, runF func(*CloneOptions) error) *cobra.Comm
 	cmd := &cobra.Command{
 		DisableFlagsInUseLine: true,
 
-		Use:   "clone <repository> [<directory>] [-- <gitflags>...]",
+		Use:   "clone <repository> [<directory>] [flags] [-- <gitflags>...]",
 		Args:  cmdutil.MinimumArgs(1, "cannot clone: repository argument required"),
 		Short: "Clone a repository locally",
 		Long: heredoc.Docf(`
@@ -60,6 +61,9 @@ func NewCmdClone(f *cmdutil.Factory, runF func(*CloneOptions) error) *cobra.Comm
 			the remote after the owner of the parent repository.
 
 			If the repository is a fork, its parent repository will be set as the default remote repository.
+
+			To disable the addition of the %[1]supstream%[1]s remote for a forked repository,
+			use the %[1]s--no-upstream%[1]s flag. For a non-forked repository, this flag has no effect.
 		`, "`"),
 		Example: heredoc.Doc(`
 			# Clone a repository from a specific org
@@ -77,8 +81,19 @@ func NewCmdClone(f *cmdutil.Factory, runF func(*CloneOptions) error) *cobra.Comm
 
 			# Clone a repository with additional git clone flags
 			$ gh repo clone cli/cli -- --depth=1
+
+			# Clone a forked repository without the upstream remote
+			$ gh repo clone myuser/cli --no-upstream
 		`),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := cmdutil.MutuallyExclusive(
+				"specify only one of `--upstream-remote-name` or `--no-upstream`",
+				cmd.Flags().Changed("upstream-remote-name") && opts.UpstreamName != "",
+				opts.NoUpstream,
+			); err != nil {
+				return err
+			}
+
 			opts.Repository = args[0]
 			opts.GitArgs = args[1:]
 
@@ -91,6 +106,7 @@ func NewCmdClone(f *cmdutil.Factory, runF func(*CloneOptions) error) *cobra.Comm
 	}
 
 	cmd.Flags().StringVarP(&opts.UpstreamName, "upstream-remote-name", "u", "upstream", "Upstream remote name when cloning a fork")
+	cmd.Flags().BoolVar(&opts.NoUpstream, "no-upstream", false, "Do not set/fetch upstream remote when cloning a fork")
 	cmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
 		if err == pflag.ErrHelp {
 			return err
@@ -186,7 +202,7 @@ func cloneRun(opts *CloneOptions) error {
 	}
 
 	// If the repo is a fork, add the parent as an upstream remote and set the parent as the default repo.
-	if canonicalRepo.Parent != nil {
+	if !opts.NoUpstream && canonicalRepo.Parent != nil {
 		protocol := cfg.GitProtocol(canonicalRepo.Parent.RepoHost()).Value
 		upstreamURL := ghrepo.FormatRemoteURL(canonicalRepo.Parent, protocol)
 
@@ -202,6 +218,12 @@ func cloneRun(opts *CloneOptions) error {
 			return err
 		}
 
+		connectedToTerminal := opts.IO.IsStdoutTTY()
+		if connectedToTerminal {
+			cs := opts.IO.ColorScheme()
+			fmt.Fprintf(opts.IO.ErrOut, "%s Fetching %s of %s\n", cs.WarningIcon(), cs.Bold(upstreamName), cs.Bold(ghrepo.FullName(canonicalRepo.Parent)))
+		}
+
 		if err := gc.Fetch(ctx, upstreamName, ""); err != nil {
 			return err
 		}
@@ -214,7 +236,6 @@ func cloneRun(opts *CloneOptions) error {
 			return err
 		}
 
-		connectedToTerminal := opts.IO.IsStdoutTTY()
 		if connectedToTerminal {
 			cs := opts.IO.ColorScheme()
 			fmt.Fprintf(opts.IO.ErrOut, "%s Repository %s set as the default repository. To learn more about the default repository, run: gh repo set-default --help\n", cs.WarningIcon(), cs.Bold(ghrepo.FullName(canonicalRepo.Parent)))
