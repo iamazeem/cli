@@ -181,6 +181,30 @@ func TestNewCmdSet(t *testing.T) {
 				Application:     "Codespaces",
 			},
 		},
+		{
+			name: "clear repos with org",
+			cli:  `random_secret --org coolOrg --clear-repos`,
+			wants: SetOptions{
+				SecretName:         "random_secret",
+				OrgName:            "coolOrg",
+				ClearSelectedRepos: true,
+			},
+		},
+		{
+			name:     "clear repos without org",
+			cli:      `random_secret --clear-repos`,
+			wantsErr: true,
+		},
+		{
+			name:     "clear repos without org and repos",
+			cli:      `random_secret --clear-repos --repos r1,r2,r3`,
+			wantsErr: true,
+		},
+		{
+			name:     "clear repos with org and repos",
+			cli:      `random_secret --org coolOrg --clear-repos --repos r1,r2,r3`,
+			wantsErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -213,13 +237,16 @@ func TestNewCmdSet(t *testing.T) {
 			assert.NoError(t, err)
 
 			assert.Equal(t, tt.wants.SecretName, gotOpts.SecretName)
-			assert.Equal(t, tt.wants.Body, gotOpts.Body)
-			assert.Equal(t, tt.wants.Visibility, gotOpts.Visibility)
 			assert.Equal(t, tt.wants.OrgName, gotOpts.OrgName)
-			assert.Equal(t, tt.wants.EnvName, gotOpts.EnvName)
-			assert.Equal(t, tt.wants.DoNotStore, gotOpts.DoNotStore)
-			assert.ElementsMatch(t, tt.wants.RepositoryNames, gotOpts.RepositoryNames)
-			assert.Equal(t, tt.wants.Application, gotOpts.Application)
+
+			if !tt.wants.ClearSelectedRepos {
+				assert.Equal(t, tt.wants.Body, gotOpts.Body)
+				assert.Equal(t, tt.wants.Visibility, gotOpts.Visibility)
+				assert.Equal(t, tt.wants.EnvName, gotOpts.EnvName)
+				assert.Equal(t, tt.wants.DoNotStore, gotOpts.DoNotStore)
+				assert.ElementsMatch(t, tt.wants.RepositoryNames, gotOpts.RepositoryNames)
+				assert.Equal(t, tt.wants.Application, gotOpts.Application)
+			}
 		})
 	}
 }
@@ -579,6 +606,142 @@ func Test_setRun_org(t *testing.T) {
 				assert.Equal(t, payload.Visibility, tt.opts.Visibility)
 				assert.ElementsMatch(t, payload.Repositories, tt.wantRepositories)
 			}
+		})
+	}
+}
+
+func Test_setRun_org_secret_clear_repos(t *testing.T) {
+	tests := []struct {
+		name                       string
+		opts                       *SetOptions
+		wantVisibility             shared.Visibility
+		wantRepositories           []int64
+		wantDependabotRepositories []string
+		wantApp                    string
+		wantClearReposErr          error
+	}{
+		{
+			name: "actions selected repos",
+			opts: &SetOptions{
+				OrgName:         "ORG",
+				Visibility:      shared.Selected,
+				RepositoryNames: []string{"ORG/REPO1", "ORG/REPO2"},
+			},
+			wantRepositories:  []int64{1, 2},
+			wantApp:           "actions",
+			wantClearReposErr: nil,
+		},
+		{
+			name: "dependabot selected repos",
+			opts: &SetOptions{
+				OrgName:         "ORG",
+				Visibility:      shared.Selected,
+				Application:     shared.Dependabot,
+				RepositoryNames: []string{"ORG/REPO1", "ORG/REPO2"},
+			},
+			wantDependabotRepositories: []string{"1", "2"},
+			wantApp:                    "dependabot",
+			wantClearReposErr:          nil,
+		},
+		{
+			name: "codespaces selected repos",
+			opts: &SetOptions{
+				OrgName:         "ORG",
+				Visibility:      shared.Selected,
+				Application:     shared.Codespaces,
+				RepositoryNames: []string{"ORG/REPO1", "ORG/REPO2"},
+			},
+			wantRepositories:  []int64{1, 2},
+			wantApp:           "codespaces",
+			wantClearReposErr: nil,
+		},
+		{
+			name: "actions selected repos",
+			opts: &SetOptions{
+				OrgName:         "ORG",
+				Visibility:      shared.Private,
+				RepositoryNames: []string{"ORG/REPO1", "ORG/REPO2"},
+			},
+			wantRepositories:  []int64{1, 2},
+			wantApp:           "actions",
+			wantClearReposErr: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+
+			orgName := tt.opts.OrgName
+
+			reg.Register(httpmock.REST("GET",
+				fmt.Sprintf("orgs/%s/%s/secrets/public-key", orgName, tt.wantApp)),
+				httpmock.JSONResponse(PubKey{ID: "123", Key: "CDjXqf7AJBXWhMczcy+Fs7JlACEptgceysutztHaFQI="}))
+
+			reg.Register(httpmock.REST("PUT",
+				fmt.Sprintf("orgs/%s/%s/secrets/cool_secret", orgName, tt.wantApp)),
+				httpmock.StatusStringResponse(201, `{}`))
+
+			if len(tt.opts.RepositoryNames) > 0 {
+				reg.Register(httpmock.GraphQL(`query MapRepositoryNames\b`),
+					httpmock.StringResponse(`{"data":{"REPO1":{"databaseId":1},"REPO2":{"databaseId":2}}}`))
+			}
+
+			ios, _, _, _ := iostreams.Test()
+
+			tt.opts.BaseRepo = func() (ghrepo.Interface, error) {
+				return ghrepo.FromFullName("owner/repo")
+			}
+			tt.opts.HttpClient = func() (*http.Client, error) {
+				return &http.Client{Transport: reg}, nil
+			}
+			tt.opts.Config = func() (gh.Config, error) {
+				return config.NewBlankConfig(), nil
+			}
+			tt.opts.IO = ios
+			tt.opts.SecretName = "cool_secret"
+			tt.opts.Body = "a secret"
+			tt.opts.RandomOverride = fakeRandom
+
+			err := setRun(tt.opts)
+			assert.NoError(t, err)
+
+			reg.Verify(t)
+
+			data, err := io.ReadAll(reg.Requests[len(reg.Requests)-1].Body)
+			assert.NoError(t, err)
+
+			if tt.opts.Application == shared.Dependabot {
+				var payload DependabotSecretPayload
+				err := json.Unmarshal(data, &payload)
+				assert.NoError(t, err)
+				assert.Equal(t, payload.KeyID, "123")
+				assert.Equal(t, payload.EncryptedValue, "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV39vl3BHiGSgj8zJapDxgB2BwqNqRhpjC4=")
+				assert.Equal(t, payload.Visibility, tt.opts.Visibility)
+				assert.ElementsMatch(t, payload.Repositories, tt.wantDependabotRepositories)
+			} else {
+				var payload SecretPayload
+				err := json.Unmarshal(data, &payload)
+				assert.NoError(t, err)
+				assert.Equal(t, payload.KeyID, "123")
+				assert.Equal(t, payload.EncryptedValue, "UKYUCbHd0DJemxa3AOcZ6XcsBwALG9d4bpB8ZT0gSV39vl3BHiGSgj8zJapDxgB2BwqNqRhpjC4=")
+				assert.Equal(t, payload.Visibility, tt.opts.Visibility)
+				assert.ElementsMatch(t, payload.Repositories, tt.wantRepositories)
+			}
+
+			// Clear selected repos
+
+			reg.Register(httpmock.REST("PUT",
+				fmt.Sprintf("orgs/%s/%s/secrets/cool_secret/repositories", orgName, tt.wantApp)),
+				httpmock.StatusStringResponse(204, ""))
+
+			tt.opts.ClearSelectedRepos = true
+			err = setRun(tt.opts)
+			assert.NoError(t, err)
+
+			reg.Verify(t)
+
+			assert.Equal(t, tt.wantClearReposErr, err)
 		})
 	}
 }

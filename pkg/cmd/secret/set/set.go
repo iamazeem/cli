@@ -33,16 +33,17 @@ type SetOptions struct {
 
 	RandomOverride func() io.Reader
 
-	SecretName      string
-	OrgName         string
-	EnvName         string
-	UserSecrets     bool
-	Body            string
-	DoNotStore      bool
-	Visibility      string
-	RepositoryNames []string
-	EnvFile         string
-	Application     string
+	SecretName         string
+	OrgName            string
+	EnvName            string
+	UserSecrets        bool
+	Body               string
+	DoNotStore         bool
+	Visibility         string
+	RepositoryNames    []string
+	ClearSelectedRepos bool
+	EnvFile            string
+	Application        string
 }
 
 func NewCmdSet(f *cmdutil.Factory, runF func(*SetOptions) error) *cobra.Command {
@@ -56,7 +57,7 @@ func NewCmdSet(f *cmdutil.Factory, runF func(*SetOptions) error) *cobra.Command 
 	cmd := &cobra.Command{
 		Use:   "set <secret-name>",
 		Short: "Create or update secrets",
-		Long: heredoc.Doc(`
+		Long: heredoc.Docf(`
 			Set a value for a secret on one of the following levels:
 			- repository (default): available to GitHub Actions runs or Dependabot in a repository
 			- environment: available to GitHub Actions runs for a deployment environment in a repository
@@ -66,8 +67,11 @@ func NewCmdSet(f *cmdutil.Factory, runF func(*SetOptions) error) *cobra.Command 
 			Organization and user secrets can optionally be restricted to only be available to
 			specific repositories.
 
+			For an existing organization secret, set with %[1]s--repos%[1]s and %[1]s--visibility=selected%[1]s,
+			all its selected repositories can be cleared by using the %[1]s--clear-repos%[1]s flag.
+
 			Secret values are locally encrypted before being sent to GitHub.
-		`),
+		`, "`"),
 		Example: heredoc.Doc(`
 			# Paste secret value for the current repository in an interactive prompt
 			$ gh secret set MYSECRET
@@ -101,6 +105,9 @@ func NewCmdSet(f *cmdutil.Factory, runF func(*SetOptions) error) *cobra.Command 
 
 			# Set multiple secrets from stdin
 			$ gh secret set -f - < myfile.txt
+
+			# Clear all selected repositories for an existing organization-level secret with visibility "selected"
+			$ gh secret set MYSECRET --org myorg --clear-repos
 		`),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -139,21 +146,34 @@ func NewCmdSet(f *cmdutil.Factory, runF func(*SetOptions) error) *cobra.Command 
 				opts.SecretName = args[0]
 			}
 
-			if cmd.Flags().Changed("visibility") {
+			if opts.ClearSelectedRepos {
 				if opts.OrgName == "" {
-					return cmdutil.FlagErrorf("`--visibility` is only supported with `--org`")
+					return cmdutil.FlagErrorf("`--org` required with `--clear-repos`")
 				}
 
-				if opts.Visibility != shared.Selected && len(opts.RepositoryNames) > 0 {
-					return cmdutil.FlagErrorf("`--repos` is only supported with `--visibility=selected`")
-				}
+				nFlags := cmd.Flags().NFlag()
+				isAppUserProvided := cmd.Flags().Changed("app")
 
-				if opts.Visibility == shared.Selected && len(opts.RepositoryNames) == 0 {
-					return cmdutil.FlagErrorf("`--repos` list required with `--visibility=selected`")
+				if (!isAppUserProvided && nFlags > 2) || (isAppUserProvided && nFlags > 3) {
+					return cmdutil.FlagErrorf("`--clear-repos` is only supported with `--org` and `--app`")
 				}
 			} else {
-				if len(opts.RepositoryNames) > 0 {
-					opts.Visibility = shared.Selected
+				if cmd.Flags().Changed("visibility") {
+					if opts.OrgName == "" {
+						return cmdutil.FlagErrorf("`--visibility` is only supported with `--org`")
+					}
+
+					if opts.Visibility != shared.Selected && len(opts.RepositoryNames) > 0 {
+						return cmdutil.FlagErrorf("`--repos` is only supported with `--visibility=selected`")
+					}
+
+					if opts.Visibility == shared.Selected && len(opts.RepositoryNames) == 0 {
+						return cmdutil.FlagErrorf("`--repos` list required with `--visibility=selected`")
+					}
+				} else {
+					if len(opts.RepositoryNames) > 0 {
+						opts.Visibility = shared.Selected
+					}
 				}
 			}
 
@@ -170,6 +190,7 @@ func NewCmdSet(f *cmdutil.Factory, runF func(*SetOptions) error) *cobra.Command 
 	cmd.Flags().BoolVarP(&opts.UserSecrets, "user", "u", false, "Set a secret for your user")
 	cmdutil.StringEnumFlag(cmd, &opts.Visibility, "visibility", "v", shared.Private, []string{shared.All, shared.Private, shared.Selected}, "Set visibility for an organization secret")
 	cmd.Flags().StringSliceVarP(&opts.RepositoryNames, "repos", "r", []string{}, "List of `repositories` that can access an organization or user secret")
+	cmd.Flags().BoolVar(&opts.ClearSelectedRepos, "clear-repos", false, "Clear all selected repositories for an existing organization secret")
 	cmd.Flags().StringVarP(&opts.Body, "body", "b", "", "The value for the secret (reads from standard input if not specified)")
 	cmd.Flags().BoolVar(&opts.DoNotStore, "no-store", false, "Print the encrypted, base64-encoded value instead of storing it on GitHub")
 	cmd.Flags().StringVarP(&opts.EnvFile, "env-file", "f", "", "Load secret names and values from a dotenv-formatted `file`")
@@ -200,16 +221,13 @@ func setRun(opts *SetOptions) error {
 		host, _ = cfg.Authentication().DefaultHost()
 	}
 
-	secrets, err := getSecretsFromOptions(opts)
-	if err != nil {
-		return err
-	}
-
 	c, err := opts.HttpClient()
 	if err != nil {
 		return fmt.Errorf("could not create http client: %w", err)
 	}
 	client := api.NewClientFromHTTP(c)
+
+	cs := opts.IO.ColorScheme()
 
 	secretEntity, err := shared.GetSecretEntity(orgName, envName, opts.UserSecrets)
 	if err != nil {
@@ -223,6 +241,34 @@ func setRun(opts *SetOptions) error {
 
 	if !shared.IsSupportedSecretEntity(secretApp, secretEntity) {
 		return fmt.Errorf("%s secrets are not supported for %s", secretEntity, secretApp)
+	}
+
+	if opts.ClearSelectedRepos {
+		err := clearOrgSecretSelectedRepositories(client, host, orgName, opts.SecretName, secretApp)
+		if err != nil {
+			if opts.IO.IsStdoutTTY() {
+				fmt.Fprintf(opts.IO.ErrOut, "%s Failed to clear all selected repositories for %s organization secret %s\n",
+					cs.FailureIcon(),
+					cs.Bold(orgName),
+					cs.Bold(opts.SecretName),
+				)
+			}
+			return err
+		} else {
+			if opts.IO.IsStdoutTTY() {
+				fmt.Fprintf(opts.IO.Out, "%s Cleared all selected repositories for %s organization secret %s\n",
+					cs.SuccessIcon(),
+					cs.Bold(orgName),
+					cs.Bold(opts.SecretName),
+				)
+			}
+			return nil
+		}
+	}
+
+	secrets, err := getSecretsFromOptions(opts)
+	if err != nil {
+		return err
 	}
 
 	var pk *PubKey
@@ -274,7 +320,6 @@ func setRun(opts *SetOptions) error {
 	}
 
 	err = nil
-	cs := opts.IO.ColorScheme()
 	for i := 0; i < len(secrets); i++ {
 		result := <-setc
 		if result.err != nil {

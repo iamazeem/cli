@@ -96,6 +96,18 @@ func putOrgSecret(client *api.Client, host string, pk *PubKey, orgName, visibili
 	return putSecret(client, host, path, payload)
 }
 
+func clearOrgSecretSelectedRepositories(client *api.Client, host, orgName, secretName string, app shared.App) error {
+	path := fmt.Sprintf("orgs/%s/%s/secrets/%s/repositories", orgName, app, secretName)
+
+	payload := struct {
+		Repositories []int64 `json:"selected_repository_ids"`
+	}{
+		Repositories: []int64{},
+	}
+
+	return putSecret(client, host, path, payload)
+}
+
 func putUserSecret(client *api.Client, host string, pk *PubKey, key, eValue string, repositoryIDs []int64) error {
 	payload := SecretPayload{
 		EncryptedValue: eValue,
