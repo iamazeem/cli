@@ -55,15 +55,11 @@ func NewCmdClone(f *cmdutil.Factory, runF func(*CloneOptions) error) *cobra.Comm
 			chosen from your configuration, which can be checked via %[1]sgh config get git_protocol%[1]s. If the protocol
 			scheme is provided, the repository will be cloned using the specified protocol.
 
-			If the repository is a fork, its parent repository will be added as an additional
-			git remote called %[1]supstream%[1]s. The remote name can be configured using %[1]s--upstream-remote-name%[1]s.
-			The %[1]s--upstream-remote-name%[1]s option supports an %[1]s@owner%[1]s value which will name
-			the remote after the owner of the parent repository.
+			If the repository is a fork, its parent repository will be added as an additional git remote named
+			%[1]supstream%[1]s and set as the default remote unless %[1]s--no-upstream%[1]s flag is specified.
 
-			If the repository is a fork, its parent repository will be set as the default remote repository.
-
-			To disable the addition of the %[1]supstream%[1]s remote for a forked repository,
-			use the %[1]s--no-upstream%[1]s flag. For a non-forked repository, this flag has no effect.
+			The remote name can be configured using the %[1]s--upstream-remote-name%[1]s flag, which supports
+			the %[1]s@owner%[1]s syntax to name it after the owner of the parent repository.
 		`, "`"),
 		Example: heredoc.Doc(`
 			# Clone a repository from a specific org
@@ -220,7 +216,6 @@ func cloneRun(opts *CloneOptions) error {
 
 		connectedToTerminal := opts.IO.IsStdoutTTY()
 		if connectedToTerminal {
-			cs := opts.IO.ColorScheme()
 			fmt.Fprintf(opts.IO.ErrOut, "Fetching %s as %s\n", upstreamName, ghrepo.FullName(canonicalRepo.Parent))
 		}
 
