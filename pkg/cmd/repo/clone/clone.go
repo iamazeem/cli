@@ -221,7 +221,7 @@ func cloneRun(opts *CloneOptions) error {
 		connectedToTerminal := opts.IO.IsStdoutTTY()
 		if connectedToTerminal {
 			cs := opts.IO.ColorScheme()
-			fmt.Fprintf(opts.IO.ErrOut, "%s Fetching %s of %s\n", cs.WarningIcon(), cs.Bold(upstreamName), cs.Bold(ghrepo.FullName(canonicalRepo.Parent)))
+			fmt.Fprintf(opts.IO.ErrOut, "Fetching %s as %s\n", upstreamName, ghrepo.FullName(canonicalRepo.Parent))
 		}
 
 		if err := gc.Fetch(ctx, upstreamName, ""); err != nil {
