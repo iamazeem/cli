@@ -18,6 +18,7 @@ var ErrNoAttestationsFound = errors.New("no attestations found")
 type Attestation struct {
 	Bundle    *bundle.Bundle `json:"bundle"`
 	BundleURL string         `json:"bundle_url"`
+	Initiator string         `json:"initiator"`
 }
 
 type AttestationsResponse struct {

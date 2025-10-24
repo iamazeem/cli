@@ -141,9 +141,10 @@ type RepositoryOwner struct {
 }
 
 type GitHubUser struct {
-	ID    string `json:"id"`
-	Login string `json:"login"`
-	Name  string `json:"name"`
+	ID         string `json:"id"`
+	Login      string `json:"login"`
+	Name       string `json:"name"`
+	DatabaseID int64  `json:"databaseId"`
 }
 
 // Actor is a superset of User and Bot, among others.

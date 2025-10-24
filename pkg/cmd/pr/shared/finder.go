@@ -103,6 +103,8 @@ type FindOptions struct {
 	// States lists the possible PR states to scope the PR-for-branch lookup to.
 	States []string
 
+	DisableProgress bool
+
 	Detector fd.Detector
 }
 
@@ -112,7 +114,7 @@ func (f *finder) Find(opts FindOptions) (*api.PullRequest, ghrepo.Interface, err
 		return nil, nil, errors.New("Find error: no fields specified")
 	}
 
-	if repo, prNumber, err := ParseURL(opts.Selector); err == nil {
+	if repo, prNumber, _, err := ParseURL(opts.Selector); err == nil {
 		f.prNumber = prNumber
 		f.baseRefRepo = repo
 	}
@@ -196,8 +198,9 @@ func (f *finder) Find(opts FindOptions) (*api.PullRequest, ghrepo.Interface, err
 		return nil, nil, err
 	}
 
+	// TODO: Decouple the PR finder from IO
 	// TODO(josebalius): Should we be guarding here?
-	if f.progress != nil {
+	if !opts.DisableProgress && f.progress != nil {
 		f.progress.StartProgressIndicator()
 		defer f.progress.StopProgressIndicator()
 	}
@@ -300,32 +303,59 @@ func (f *finder) Find(opts FindOptions) (*api.PullRequest, ghrepo.Interface, err
 	return pr, f.baseRefRepo, g.Wait()
 }
 
-var pullURLRE = regexp.MustCompile(`^/([^/]+)/([^/]+)/pull/(\d+)`)
+var pullURLRE = regexp.MustCompile(`^/([^/]+)/([^/]+)/pull/(\d+)(.*$)`)
 
-// ParseURL parses a pull request URL and returns the repository and pull
-// request number.
-func ParseURL(prURL string) (ghrepo.Interface, int, error) {
+// ParseURL parses a pull request URL and returns the repository, pull request
+// number, and any tailing path components. If there is no error, the returned
+// repo is not nil and will have non-empty hostname.
+func ParseURL(prURL string) (ghrepo.Interface, int, string, error) {
 	if prURL == "" {
-		return nil, 0, fmt.Errorf("invalid URL: %q", prURL)
+		return nil, 0, "", fmt.Errorf("invalid URL: %q", prURL)
 	}
 
 	u, err := url.Parse(prURL)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 
 	if u.Scheme != "https" && u.Scheme != "http" {
-		return nil, 0, fmt.Errorf("invalid scheme: %s", u.Scheme)
+		return nil, 0, "", fmt.Errorf("invalid scheme: %s", u.Scheme)
 	}
 
 	m := pullURLRE.FindStringSubmatch(u.Path)
 	if m == nil {
-		return nil, 0, fmt.Errorf("not a pull request URL: %s", prURL)
+		return nil, 0, "", fmt.Errorf("not a pull request URL: %s", prURL)
 	}
 
 	repo := ghrepo.NewWithHost(m[1], m[2], u.Hostname())
 	prNumber, _ := strconv.Atoi(m[3])
-	return repo, prNumber, nil
+	tail := m[4]
+	return repo, prNumber, tail, nil
+}
+
+var fullReferenceRE = regexp.MustCompile(`^(?:([^/]+)/([^/]+))#(\d+)$`)
+
+// ParseFullReference parses a short issue/pull request reference of the form
+// "owner/repo#number", where owner, repo and number are all required.
+func ParseFullReference(s string) (ghrepo.Interface, int, error) {
+	if s == "" {
+		return nil, 0, errors.New("empty reference")
+	}
+
+	m := fullReferenceRE.FindStringSubmatch(s)
+	if m == nil {
+		return nil, 0, fmt.Errorf("invalid reference: %q", s)
+	}
+
+	number, err := strconv.Atoi(m[3])
+	if err != nil {
+		return nil, 0, fmt.Errorf("invalid reference: %q", number)
+	}
+
+	owner := m[1]
+	repo := m[2]
+
+	return ghrepo.New(owner, repo), number, nil
 }
 
 func findByNumber(httpClient *http.Client, repo ghrepo.Interface, number int, fields []string) (*api.PullRequest, error) {

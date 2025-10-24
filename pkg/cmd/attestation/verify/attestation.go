@@ -25,6 +25,7 @@ func getAttestations(o *Options, a artifact.DigestedArtifact) ([]*api.Attestatio
 			Owner:         o.Owner,
 			PredicateType: o.PredicateType,
 			Repo:          o.Repo,
+			Initiator:     "user",
 		}
 
 		attestations, err := o.APIClient.GetByDigest(params)

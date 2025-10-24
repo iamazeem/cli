@@ -123,6 +123,49 @@ func Test_verifyAssetRun_Success(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func Test_verifyAssetRun_SuccessNoTagArg(t *testing.T) {
+	ios, _, _, _ := iostreams.Test()
+	tagName := "v6"
+
+	fakeHTTP := &httpmock.Registry{}
+	defer fakeHTTP.Verify(t)
+	fakeSHA := "1234567890abcdef1234567890abcdef12345678"
+	shared.StubFetchRefSHA(t, fakeHTTP, "OWNER", "REPO", tagName, fakeSHA)
+	shared.StubFetchRelease(t, fakeHTTP, "OWNER", "REPO", "", `{
+				"tag_name": "v6",
+				"draft": false,
+				"url": "https://api.github.com/repos/OWNER/REPO/releases/23456"
+			}`)
+
+	baseRepo, err := ghrepo.FromFullName("OWNER/REPO")
+	require.NoError(t, err)
+	result := &verification.AttestationProcessingResult{
+		Attestation: &api.Attestation{
+			Bundle:    data.GitHubReleaseBundle(t),
+			BundleURL: "https://example.com",
+		},
+		VerificationResult: nil,
+	}
+
+	releaseAssetPath := test.NormalizeRelativePath("../../attestation/test/data/github_release_artifact.zip")
+
+	cfg := &VerifyAssetConfig{
+		Opts: &VerifyAssetOptions{
+			AssetFilePath: releaseAssetPath,
+			TagName:       "", // No tag argument provided
+			BaseRepo:      baseRepo,
+			Exporter:      nil,
+		},
+		IO:          ios,
+		HttpClient:  &http.Client{Transport: fakeHTTP},
+		AttClient:   api.NewTestClient(),
+		AttVerifier: shared.NewMockVerifier(result),
+	}
+
+	err = verifyAssetRun(cfg)
+	require.NoError(t, err)
+}
+
 func Test_verifyAssetRun_FailedNoAttestations(t *testing.T) {
 	ios, _, _, _ := iostreams.Test()
 	tagName := "v1"

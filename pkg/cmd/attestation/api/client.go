@@ -34,6 +34,7 @@ type FetchParams struct {
 	Owner         string
 	PredicateType string
 	Repo          string
+	Initiator     string
 }
 
 func (p *FetchParams) Validate() error {
@@ -147,6 +148,17 @@ func (c *LiveClient) getAttestations(params FetchParams) ([]*Attestation, error)
 			}
 
 			url = newURL
+
+			// filter by the initiator type
+			if params.Initiator != "" {
+				filtered := make([]*Attestation, 0, len(resp.Attestations))
+				for _, att := range resp.Attestations {
+					if att.Initiator == params.Initiator {
+						filtered = append(filtered, att)
+					}
+				}
+				resp.Attestations = filtered
+			}
 			attestations = append(attestations, resp.Attestations...)
 
 			return nil

@@ -250,7 +250,7 @@ func printContent(io *iostreams.IOStreams, gists []shared.Gist, filter *regexp.R
 			}
 
 			if file.Content != "" {
-				for _, line := range strings.FieldsFunc(file.Content, split) {
+				for line := range strings.FieldsFuncSeq(file.Content, split) {
 					if filter.MatchString(line) {
 						if line, err = highlightMatch(line, filter, &matched, normal, cs.Highlight); err != nil {
 							return err

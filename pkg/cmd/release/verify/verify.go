@@ -41,21 +41,16 @@ func NewCmdVerify(f *cmdutil.Factory, runF func(config *VerifyConfig) error) *co
 	opts := &VerifyOptions{}
 
 	cmd := &cobra.Command{
-		Use:    "verify [<tag>]",
-		Short:  "Verify the attestation for a GitHub Release.",
-		Hidden: true,
-		Args:   cobra.MaximumNArgs(1),
+		Use:   "verify [<tag>]",
+		Short: "Verify the attestation for a release",
+		Args:  cobra.MaximumNArgs(1),
 		Long: heredoc.Doc(`
 			Verify that a GitHub Release is accompanied by a valid cryptographically signed attestation.
 
-			## Understanding Verification
-
 			An attestation is a claim made by GitHub regarding a release and its assets.
 
-			## What This Command Does
-
-			This command checks that the specified release (or the latest release, if no tag is given) has a valid attestation.
-			It fetches the attestation for the release and prints out metadata about all assets referenced in the attestation, including their digests.
+			This command checks that the specified release (or the latest release, if no tag is given) has a valid attestation. 
+			It fetches the attestation for the release and prints metadata about all assets referenced in the attestation, including their digests.
 		`),
 		Example: heredoc.Doc(`
 			# Verify the latest release
@@ -140,9 +135,10 @@ func verifyRun(config *VerifyConfig) error {
 	// Find all the attestations for the release tag SHA
 	attestations, err := config.AttClient.GetByDigest(api.FetchParams{
 		Digest:        releaseRefDigest.DigestWithAlg(),
-		PredicateType: shared.ReleasePredicateType,
+		PredicateType: "release",
 		Owner:         baseRepo.RepoOwner(),
 		Repo:          baseRepo.RepoOwner() + "/" + baseRepo.RepoName(),
+		Initiator:     "github",
 		// TODO: Allow this value to be set via a flag.
 		// The limit is set to 100 to ensure we fetch all attestations for a given SHA.
 		// While multiple attestations can exist for a single SHA,

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cli/cli/v2/internal/browser"
+	fd "github.com/cli/cli/v2/internal/featuredetection"
 	"github.com/cli/cli/v2/internal/tableprinter"
 	"github.com/cli/cli/v2/internal/text"
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -42,12 +43,16 @@ func Searcher(f *cmdutil.Factory) (search.Searcher, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	host, _ := cfg.Authentication().DefaultHost()
 	client, err := f.HttpClient()
 	if err != nil {
 		return nil, err
 	}
-	return search.NewSearcher(client, host), nil
+
+	detector := fd.NewDetector(client, host)
+
+	return search.NewSearcher(client, host, detector), nil
 }
 
 func SearchIssues(opts *IssuesOptions) error {

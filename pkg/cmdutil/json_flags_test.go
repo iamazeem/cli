@@ -119,6 +119,44 @@ func TestAddJSONFlags(t *testing.T) {
 	}
 }
 
+func TestAddJSONFlagsWithoutShorthand(t *testing.T) {
+	tests := []struct {
+		name      string
+		setFlags  func(cmd *cobra.Command)
+		wantFlags map[string]string
+	}{
+		{
+			name: "no conflicting flags",
+			setFlags: func(cmd *cobra.Command) {
+				cmd.Flags().StringP("web", "w", "", "")
+				cmd.Flags().StringP("token", "t", "", "")
+			},
+			wantFlags: map[string]string{
+				"web":      "w",
+				"token":    "t",
+				"jq":       "",
+				"template": "",
+				"json":     "",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			cmd := &cobra.Command{Run: func(*cobra.Command, []string) {}}
+			tt.setFlags(cmd)
+
+			AddJSONFlagsWithoutShorthand(cmd, nil, []string{})
+
+			for f, shorthand := range tt.wantFlags {
+				flag := cmd.Flags().Lookup(f)
+				require.NotNil(t, flag)
+				require.Equal(t, shorthand, flag.Shorthand)
+			}
+		})
+	}
+}
+
 // TestAddJSONFlagsSetsAnnotations asserts that `AddJSONFlags` function adds the
 // appropriate annotation to the command, which could later be used by doc
 // generator functions.

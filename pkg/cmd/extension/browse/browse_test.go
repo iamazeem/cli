@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cli/cli/v2/internal/config"
+	fd "github.com/cli/cli/v2/internal/featuredetection"
 	"github.com/cli/cli/v2/internal/gh"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/cmd/repo/view"
@@ -125,7 +126,7 @@ func Test_getExtensionRepos(t *testing.T) {
 		}),
 	)
 
-	searcher := search.NewSearcher(client, "github.com")
+	searcher := search.NewSearcher(client, "github.com", &fd.DisabledDetectorMock{})
 	emMock := &extensions.ExtensionManagerMock{}
 	emMock.ListFunc = func() []extensions.Extension {
 		return []extensions.Extension{

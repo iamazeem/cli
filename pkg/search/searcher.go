@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	fd "github.com/cli/cli/v2/internal/featuredetection"
 	"github.com/cli/cli/v2/internal/ghinstance"
 )
 
@@ -34,8 +35,9 @@ type Searcher interface {
 }
 
 type searcher struct {
-	client *http.Client
-	host   string
+	client   *http.Client
+	detector fd.Detector
+	host     string
 }
 
 type httpError struct {
@@ -52,10 +54,11 @@ type httpErrorItem struct {
 	Resource string
 }
 
-func NewSearcher(client *http.Client, host string) Searcher {
+func NewSearcher(client *http.Client, host string, detector fd.Detector) Searcher {
 	return &searcher{
-		client: client,
-		host:   host,
+		client:   client,
+		host:     host,
+		detector: detector,
 	}
 }
 
@@ -205,7 +208,31 @@ func (s searcher) search(query Query, result interface{}) (*http.Response, error
 	qs := url.Values{}
 	qs.Set("page", strconv.Itoa(query.Page))
 	qs.Set("per_page", strconv.Itoa(query.Limit))
-	qs.Set("q", query.String())
+
+	if query.Kind == KindIssues {
+		// TODO advancedIssueSearchCleanup
+		// We won't need feature detection when GHES 3.17 support ends, since
+		// the advanced issue search is the only available search backend for
+		// issues.
+		features, err := s.detector.SearchFeatures()
+		if err != nil {
+			return nil, err
+		}
+
+		if !features.AdvancedIssueSearchAPI {
+			qs.Set("q", query.StandardSearchString())
+		} else {
+			qs.Set("q", query.AdvancedIssueSearchString())
+
+			if features.AdvancedIssueSearchAPIOptIn {
+				// Advanced syntax should be explicitly enabled
+				qs.Set("advanced_search", "true")
+			}
+		}
+	} else {
+		qs.Set("q", query.StandardSearchString())
+	}
+
 	if query.Order != "" {
 		qs.Set(orderKey, query.Order)
 	}
@@ -240,11 +267,19 @@ func (s searcher) search(query Query, result interface{}) (*http.Response, error
 	return resp, nil
 }
 
+// URL returns URL to the global search in web GUI (i.e. github.com/search).
 func (s searcher) URL(query Query) string {
 	path := fmt.Sprintf("https://%s/search", s.host)
 	qs := url.Values{}
 	qs.Set("type", query.Kind)
-	qs.Set("q", query.String())
+
+	// TODO advancedSearchFuture
+	// Currently, the global search GUI does not support the advanced issue
+	// search syntax (even for the issues/PRs tab on the sidebar). When the GUI
+	// is updated, we can use feature detection, and, if available, use the
+	// advanced search syntax.
+	qs.Set("q", query.StandardSearchString())
+
 	if query.Order != "" {
 		qs.Set(orderKey, query.Order)
 	}

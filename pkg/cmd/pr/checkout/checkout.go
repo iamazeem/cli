@@ -57,7 +57,8 @@ func NewCmdCheckout(f *cmdutil.Factory, runF func(*CheckoutOptions) error) *cobr
 			$ gh pr checkout https://github.com/OWNER/REPO/pull/32
 			$ gh pr checkout feature
 		`),
-		Args: cobra.MaximumNArgs(1),
+		Args:    cobra.MaximumNArgs(1),
+		Aliases: []string{"co"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
 				opts.PRResolver = &specificPRResolver{

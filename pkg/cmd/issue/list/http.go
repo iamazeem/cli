@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/cli/cli/v2/api"
+	fd "github.com/cli/cli/v2/internal/featuredetection"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	prShared "github.com/cli/cli/v2/pkg/cmd/pr/shared"
 )
@@ -112,7 +113,16 @@ loop:
 	return &res, nil
 }
 
-func searchIssues(client *api.Client, repo ghrepo.Interface, filters prShared.FilterOptions, limit int) (*api.IssuesAndTotalCount, error) {
+func searchIssues(client *api.Client, detector fd.Detector, repo ghrepo.Interface, filters prShared.FilterOptions, limit int) (*api.IssuesAndTotalCount, error) {
+	// TODO advancedIssueSearchCleanup
+	// We won't need feature detection when GHES 3.17 support ends, since
+	// the advanced issue search is the only available search backend for
+	// issues.
+	features, err := detector.SearchFeatures()
+	if err != nil {
+		return nil, err
+	}
+
 	fragments := fmt.Sprintf("fragment issue on Issue {%s}", api.IssueGraphQL(filters.Fields))
 	query := fragments +
 		`query IssueSearch($repo: String!, $owner: String!, $type: SearchType!, $limit: Int, $after: String, $query: String!) {
@@ -143,18 +153,27 @@ func searchIssues(client *api.Client, repo ghrepo.Interface, filters prShared.Fi
 		}
 	}
 
-	filters.Repo = ghrepo.FullName(repo)
-	filters.Entity = "issue"
-	q := prShared.SearchQueryBuild(filters)
-
 	perPage := min(limit, 100)
 
 	variables := map[string]interface{}{
 		"owner": repo.RepoOwner(),
 		"repo":  repo.RepoName(),
-		"type":  "ISSUE",
 		"limit": perPage,
-		"query": q,
+	}
+
+	filters.Repo = ghrepo.FullName(repo)
+	filters.Entity = "issue"
+
+	if features.AdvancedIssueSearchAPI {
+		variables["query"] = prShared.SearchQueryBuild(filters, true)
+		if features.AdvancedIssueSearchAPIOptIn {
+			variables["type"] = "ISSUE_ADVANCED"
+		} else {
+			variables["type"] = "ISSUE"
+		}
+	} else {
+		variables["query"] = prShared.SearchQueryBuild(filters, false)
+		variables["type"] = "ISSUE"
 	}
 
 	ic := api.IssuesAndTotalCount{SearchCapped: limit > 1000}

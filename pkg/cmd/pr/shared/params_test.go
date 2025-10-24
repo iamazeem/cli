@@ -19,8 +19,9 @@ func Test_listURLWithQuery(t *testing.T) {
 	falseBool := false
 
 	type args struct {
-		listURL string
-		options FilterOptions
+		listURL                   string
+		options                   FilterOptions
+		advancedIssueSearchSyntax bool
 	}
 
 	tests := []struct {
@@ -42,6 +43,19 @@ func Test_listURLWithQuery(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "blank, advanced search",
+			args: args{
+				listURL: "https://example.com/path?a=b",
+				options: FilterOptions{
+					Entity: "issue",
+					State:  "open",
+				},
+				advancedIssueSearchSyntax: true,
+			},
+			want:    "https://example.com/path?a=b&q=state%3Aopen+type%3Aissue",
+			wantErr: false,
+		},
+		{
 			name: "draft",
 			args: args{
 				listURL: "https://example.com/path",
@@ -55,6 +69,20 @@ func Test_listURLWithQuery(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "draft, advanced search",
+			args: args{
+				listURL: "https://example.com/path",
+				options: FilterOptions{
+					Entity: "pr",
+					State:  "open",
+					Draft:  &trueBool,
+				},
+				advancedIssueSearchSyntax: true,
+			},
+			want:    "https://example.com/path?q=draft%3Atrue+state%3Aopen+type%3Apr",
+			wantErr: false,
+		},
+		{
 			name: "non-draft",
 			args: args{
 				listURL: "https://example.com/path",
@@ -63,6 +91,20 @@ func Test_listURLWithQuery(t *testing.T) {
 					State:  "open",
 					Draft:  &falseBool,
 				},
+			},
+			want:    "https://example.com/path?q=draft%3Afalse+state%3Aopen+type%3Apr",
+			wantErr: false,
+		},
+		{
+			name: "non-draft, advanced search",
+			args: args{
+				listURL: "https://example.com/path",
+				options: FilterOptions{
+					Entity: "pr",
+					State:  "open",
+					Draft:  &falseBool,
+				},
+				advancedIssueSearchSyntax: true,
 			},
 			want:    "https://example.com/path?q=draft%3Afalse+state%3Aopen+type%3Apr",
 			wantErr: false,
@@ -85,6 +127,24 @@ func Test_listURLWithQuery(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "all, advanced search",
+			args: args{
+				listURL: "https://example.com/path",
+				options: FilterOptions{
+					Entity:     "issue",
+					State:      "open",
+					Assignee:   "bo",
+					Author:     "ka",
+					BaseBranch: "trunk",
+					HeadBranch: "bug-fix",
+					Mention:    "nu",
+				},
+				advancedIssueSearchSyntax: true,
+			},
+			want:    "https://example.com/path?q=assignee%3Abo+author%3Aka+base%3Atrunk+head%3Abug-fix+mentions%3Anu+state%3Aopen+type%3Aissue",
+			wantErr: false,
+		},
+		{
 			name: "spaces in values",
 			args: args{
 				listURL: "https://example.com/path",
@@ -98,10 +158,25 @@ func Test_listURLWithQuery(t *testing.T) {
 			want:    "https://example.com/path?q=label%3A%22help+wanted%22+label%3Adocs+milestone%3A%22Codename+%5C%22What+Was+Missing%5C%22%22+state%3Aopen+type%3Apr",
 			wantErr: false,
 		},
+		{
+			name: "spaces in values, advanced search",
+			args: args{
+				listURL: "https://example.com/path",
+				options: FilterOptions{
+					Entity:    "pr",
+					State:     "open",
+					Labels:    []string{"docs", "help wanted"},
+					Milestone: `Codename "What Was Missing"`,
+				},
+				advancedIssueSearchSyntax: true,
+			},
+			want:    "https://example.com/path?q=label%3A%22help+wanted%22+label%3Adocs+milestone%3A%22Codename+%5C%22What+Was+Missing%5C%22%22+state%3Aopen+type%3Apr",
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ListURLWithQuery(tt.args.listURL, tt.args.options)
+			got, err := ListURLWithQuery(tt.args.listURL, tt.args.options, tt.args.advancedIssueSearchSyntax)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("listURLWithQuery() error = %v, wantErr %v", err, tt.wantErr)
 				return

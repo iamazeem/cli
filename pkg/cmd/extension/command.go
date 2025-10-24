@@ -12,6 +12,7 @@ import (
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/cli/v2/api"
 	"github.com/cli/cli/v2/git"
+	"github.com/cli/cli/v2/internal/featuredetection"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/internal/tableprinter"
 	"github.com/cli/cli/v2/internal/text"
@@ -164,7 +165,8 @@ func NewCmdExtension(f *cmdutil.Factory) *cobra.Command {
 					query.Qualifiers = qualifiers
 
 					host, _ := cfg.Authentication().DefaultHost()
-					searcher := search.NewSearcher(client, host)
+					detector := featuredetection.NewDetector(client, host)
+					searcher := search.NewSearcher(client, host, detector)
 
 					if webMode {
 						url := searcher.URL(query)
@@ -507,7 +509,8 @@ func NewCmdExtension(f *cmdutil.Factory) *cobra.Command {
 						return err
 					}
 
-					searcher := search.NewSearcher(api.NewCachedHTTPClient(client, time.Hour*24), host)
+					detector := featuredetection.NewDetector(client, host)
+					searcher := search.NewSearcher(api.NewCachedHTTPClient(client, time.Hour*24), host, detector)
 
 					gc.Stderr = gio.Discard
 

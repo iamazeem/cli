@@ -7,6 +7,7 @@ import (
 
 	"github.com/cli/cli/v2/internal/browser"
 	"github.com/cli/cli/v2/internal/config"
+	fd "github.com/cli/cli/v2/internal/featuredetection"
 	"github.com/cli/cli/v2/internal/gh"
 	ghmock "github.com/cli/cli/v2/internal/gh/mock"
 	"github.com/cli/cli/v2/pkg/cmdutil"
@@ -336,7 +337,7 @@ func TestCodeRun(t *testing.T) {
 						Extension: "go",
 					},
 				},
-				Searcher: search.NewSearcher(nil, "github.com"),
+				Searcher: search.NewSearcher(nil, "github.com", &fd.DisabledDetectorMock{}),
 				WebMode:  true,
 			},
 			wantBrowse: "https://github.com/search?q=map+path%3Atesting.go&type=code",
@@ -354,7 +355,7 @@ func TestCodeRun(t *testing.T) {
 						Extension: ".cpp",
 					},
 				},
-				Searcher: search.NewSearcher(nil, "github.com"),
+				Searcher: search.NewSearcher(nil, "github.com", &fd.DisabledDetectorMock{}),
 				WebMode:  true,
 			},
 			wantBrowse: "https://github.com/search?q=map+path%3Atesting.cpp&type=code",
@@ -381,7 +382,7 @@ func TestCodeRun(t *testing.T) {
 						Extension: "go",
 					},
 				},
-				Searcher: search.NewSearcher(nil, "example.com"),
+				Searcher: search.NewSearcher(nil, "example.com", &fd.DisabledDetectorMock{}),
 				WebMode:  true,
 			},
 			wantBrowse: "https://example.com/search?q=map+extension%3Ago+filename%3Atesting&type=code",

@@ -25,6 +25,7 @@ type DeleteOptions struct {
 	DeleteAll         bool
 	SucceedOnNoCaches bool
 	Identifier        string
+	Ref               string
 }
 
 func NewCmdDelete(f *cmdutil.Factory, runF func(*DeleteOptions) error) *cobra.Command {
@@ -51,6 +52,12 @@ func NewCmdDelete(f *cmdutil.Factory, runF func(*DeleteOptions) error) *cobra.Co
 			# Delete a cache by id in a specific repo
 			$ gh cache delete 1234 --repo cli/cli
 
+			# Delete a cache by key and branch ref
+			$ gh cache delete cache-key --ref refs/heads/feature-branch
+
+			# Delete a cache by key and PR ref
+			$ gh cache delete cache-key --ref refs/pull/<PR-number>/merge
+
 			# Delete all caches (exit code 1 on no caches)
 			$ gh cache delete --all
 
@@ -69,12 +76,29 @@ func NewCmdDelete(f *cmdutil.Factory, runF func(*DeleteOptions) error) *cobra.Co
 				return err
 			}
 
+			if err := cmdutil.MutuallyExclusive(
+				"--ref cannot be used with --all",
+				opts.DeleteAll, opts.Ref != "",
+			); err != nil {
+				return err
+			}
+
 			if !opts.DeleteAll && opts.SucceedOnNoCaches {
 				return cmdutil.FlagErrorf("--succeed-on-no-caches must be used in conjunction with --all")
 			}
 
+			if opts.Ref != "" && len(args) == 0 {
+				return cmdutil.FlagErrorf("must provide a cache key")
+			}
+
 			if !opts.DeleteAll && len(args) == 0 {
 				return cmdutil.FlagErrorf("must provide either cache id, cache key, or use --all")
+			}
+
+			if len(args) > 0 && opts.Ref != "" {
+				if _, ok := parseCacheID(args[0]); ok {
+					return cmdutil.FlagErrorf("--ref cannot be used with cache ID")
+				}
 			}
 
 			if len(args) == 1 {
@@ -90,6 +114,7 @@ func NewCmdDelete(f *cmdutil.Factory, runF func(*DeleteOptions) error) *cobra.Co
 	}
 
 	cmd.Flags().BoolVarP(&opts.DeleteAll, "all", "a", false, "Delete all caches")
+	cmd.Flags().StringVarP(&opts.Ref, "ref", "r", "", "Delete by cache key and ref, formatted as refs/heads/<branch name> or refs/pull/<number>/merge")
 	cmd.Flags().BoolVar(&opts.SucceedOnNoCaches, "succeed-on-no-caches", false, "Return exit code 0 if no caches found. Must be used in conjunction with `--all`")
 
 	return cmd
@@ -139,22 +164,27 @@ func deleteCaches(opts *DeleteOptions, client *api.Client, repo ghrepo.Interface
 	cs := opts.IO.ColorScheme()
 	repoName := ghrepo.FullName(repo)
 	opts.IO.StartProgressIndicator()
-	base := fmt.Sprintf("repos/%s/actions/caches", repoName)
 
+	totalDeleted := 0
 	for _, cache := range toDelete {
-		path := ""
-		if id, err := strconv.Atoi(cache); err == nil {
-			path = fmt.Sprintf("%s/%d", base, id)
+		var count int
+		var err error
+		if id, ok := parseCacheID(cache); ok {
+			err = deleteCacheByID(client, repo, id)
+			count = 1
 		} else {
-			path = fmt.Sprintf("%s?key=%s", base, url.QueryEscape(cache))
+			count, err = deleteCacheByKey(client, repo, cache, opts.Ref)
 		}
 
-		err := client.REST(repo.RepoHost(), "DELETE", path, nil, nil)
 		if err != nil {
 			var httpErr api.HTTPError
 			if errors.As(err, &httpErr) {
 				if httpErr.StatusCode == http.StatusNotFound {
-					err = fmt.Errorf("%s Could not find a cache matching %s in %s", cs.FailureIcon(), cache, repoName)
+					if opts.Ref == "" {
+						err = fmt.Errorf("%s Could not find a cache matching %s in %s", cs.FailureIcon(), cache, repoName)
+					} else {
+						err = fmt.Errorf("%s Could not find a cache matching %s (with ref %s) in %s", cs.FailureIcon(), cache, opts.Ref, repoName)
+					}
 				} else {
 					err = fmt.Errorf("%s Failed to delete cache: %w", cs.FailureIcon(), err)
 				}
@@ -162,13 +192,46 @@ func deleteCaches(opts *DeleteOptions, client *api.Client, repo ghrepo.Interface
 			opts.IO.StopProgressIndicator()
 			return err
 		}
+
+		totalDeleted += count
 	}
 
 	opts.IO.StopProgressIndicator()
 
 	if opts.IO.IsStdoutTTY() {
-		fmt.Fprintf(opts.IO.Out, "%s Deleted %s from %s\n", cs.SuccessIcon(), text.Pluralize(len(toDelete), "cache"), repoName)
+		fmt.Fprintf(opts.IO.Out, "%s Deleted %s from %s\n", cs.SuccessIcon(), text.Pluralize(totalDeleted, "cache"), repoName)
 	}
 
 	return nil
+}
+
+func deleteCacheByID(client *api.Client, repo ghrepo.Interface, id int) error {
+	// returns HTTP 204 (NO CONTENT) on success
+	path := fmt.Sprintf("repos/%s/actions/caches/%d", ghrepo.FullName(repo), id)
+	return client.REST(repo.RepoHost(), "DELETE", path, nil, nil)
+}
+
+// deleteCacheByKey deletes cache entries by given key (and optional ref) and
+// returns the number of deleted entries.
+//
+// Note that a key/ref combination does not necessarily map to a single cache
+// entry. There may be more than one entries with the same key/ref combination,
+// but those entries will have different IDs.
+func deleteCacheByKey(client *api.Client, repo ghrepo.Interface, key, ref string) (int, error) {
+	path := fmt.Sprintf("repos/%s/actions/caches?key=%s", ghrepo.FullName(repo), url.QueryEscape(key))
+	if ref != "" {
+		path += fmt.Sprintf("&ref=%s", url.QueryEscape(ref))
+	}
+	var payload shared.CachePayload
+	err := client.REST(repo.RepoHost(), "DELETE", path, nil, &payload)
+	if err != nil {
+		return 0, err
+	}
+
+	return payload.TotalCount, nil
+}
+
+func parseCacheID(arg string) (int, bool) {
+	id, err := strconv.Atoi(arg)
+	return id, err == nil
 }

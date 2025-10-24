@@ -11,6 +11,7 @@ import (
 	"github.com/cli/cli/v2/git"
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/pkg/httpmock"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,6 +21,7 @@ func TestParseURL(t *testing.T) {
 		arg      string
 		wantRepo ghrepo.Interface
 		wantNum  int
+		wantRest string
 		wantErr  string
 	}{
 		{
@@ -35,13 +37,44 @@ func TestParseURL(t *testing.T) {
 			wantNum:  123,
 		},
 		{
+			name:     "valid HTTP URL with rest",
+			arg:      "http://example.com/owner/repo/pull/123/foo/bar",
+			wantRepo: ghrepo.NewWithHost("owner", "repo", "example.com"),
+			wantNum:  123,
+			wantRest: "/foo/bar",
+		},
+		{
+			name:     "valid HTTP URL with .patch as rest",
+			arg:      "http://example.com/owner/repo/pull/123.patch",
+			wantRepo: ghrepo.NewWithHost("owner", "repo", "example.com"),
+			wantNum:  123,
+			wantRest: ".patch",
+		},
+		{
+			name:     "valid HTTP URL with a trailing slash",
+			arg:      "http://example.com/owner/repo/pull/123/",
+			wantRepo: ghrepo.NewWithHost("owner", "repo", "example.com"),
+			wantNum:  123,
+			wantRest: "/",
+		},
+		{
 			name:    "empty URL",
 			wantErr: "invalid URL: \"\"",
+		},
+		{
+			name:    "no scheme",
+			arg:     "github.com/owner/repo/pull/123",
+			wantErr: "invalid scheme: ",
 		},
 		{
 			name:    "invalid scheme",
 			arg:     "ftp://github.com/owner/repo/pull/123",
 			wantErr: "invalid scheme: ftp",
+		},
+		{
+			name:    "no hostname",
+			arg:     "/owner/repo/pull/123",
+			wantErr: "invalid scheme: ",
 		},
 		{
 			name:    "incorrect path",
@@ -62,7 +95,7 @@ func TestParseURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, num, err := ParseURL(tt.arg)
+			repo, num, rest, err := ParseURL(tt.arg)
 
 			if tt.wantErr != "" {
 				require.Error(t, err)
@@ -72,8 +105,83 @@ func TestParseURL(t *testing.T) {
 
 			require.NoError(t, err)
 			require.Equal(t, tt.wantNum, num)
+			require.Equal(t, tt.wantRest, rest)
 			require.NotNil(t, repo)
 			require.True(t, ghrepo.IsSame(tt.wantRepo, repo))
+		})
+	}
+}
+
+func TestParseFullReference(t *testing.T) {
+	tests := []struct {
+		name       string
+		arg        string
+		wantRepo   ghrepo.Interface
+		wantNumber int
+		wantErr    string
+	}{
+		{
+			name:    "number",
+			arg:     "123",
+			wantErr: `invalid reference: "123"`,
+		},
+		{
+			name:    "number with hash",
+			arg:     "#123",
+			wantErr: `invalid reference: "#123"`,
+		},
+		{
+			name:       "full form",
+			arg:        "OWNER/REPO#123",
+			wantNumber: 123,
+			wantRepo:   ghrepo.New("OWNER", "REPO"),
+		},
+		{
+			name:    "empty",
+			wantErr: "empty reference",
+		},
+		{
+			name:    "invalid full form, without hash",
+			arg:     "OWNER/REPO123",
+			wantErr: `invalid reference: "OWNER/REPO123"`,
+		},
+		{
+			name:    "invalid full form, empty owner and repo",
+			arg:     "/#123",
+			wantErr: `invalid reference: "/#123"`,
+		},
+		{
+			name:    "invalid full form, without owner",
+			arg:     "REPO#123",
+			wantErr: `invalid reference: "REPO#123"`,
+		},
+		{
+			name:    "invalid full form, without repo",
+			arg:     "OWNER/#123",
+			wantErr: `invalid reference: "OWNER/#123"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, number, err := ParseFullReference(tt.arg)
+
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				assert.Nil(t, repo)
+				assert.Zero(t, number)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantNumber, number)
+
+			if tt.wantRepo != nil {
+				require.NotNil(t, repo)
+				assert.True(t, ghrepo.IsSame(tt.wantRepo, repo))
+			} else {
+				assert.Nil(t, repo)
+			}
 		})
 	}
 }
@@ -82,9 +190,11 @@ type args struct {
 	baseRepoFn      func() (ghrepo.Interface, error)
 	branchFn        func() (string, error)
 	gitConfigClient stubGitConfigClient
+	progress        *stubProgressIndicator
 	selector        string
 	fields          []string
 	baseBranch      string
+	disableProgress bool
 }
 
 func TestFind(t *testing.T) {
@@ -120,12 +230,13 @@ func TestFind(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		args     args
-		httpStub func(*httpmock.Registry)
-		wantPR   int
-		wantRepo string
-		wantErr  bool
+		name            string
+		args            args
+		httpStub        func(*httpmock.Registry)
+		wantUseProgress bool
+		wantPR          int
+		wantRepo        string
+		wantErr         bool
 	}{
 		{
 			name: "number argument",
@@ -716,6 +827,51 @@ func TestFind(t *testing.T) {
 			wantPR:   13,
 			wantRepo: "https://github.com/OWNER/REPO",
 		},
+		{
+			name: "number argument, with non nil-progress indicator",
+			args: args{
+				selector:   "13",
+				fields:     []string{"id", "number"},
+				baseRepoFn: stubBaseRepoFn(ghrepo.New("ORIGINOWNER", "REPO"), nil),
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				progress: &stubProgressIndicator{},
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestByNumber\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequest":{"number":13}
+					}}}`))
+			},
+			wantPR:          13,
+			wantRepo:        "https://github.com/ORIGINOWNER/REPO",
+			wantUseProgress: true,
+		},
+		{
+			name: "number argument, with non-nil progress indicator and DisableProgress set",
+			args: args{
+				selector:   "13",
+				fields:     []string{"id", "number"},
+				baseRepoFn: stubBaseRepoFn(ghrepo.New("ORIGINOWNER", "REPO"), nil),
+				branchFn: func() (string, error) {
+					return "blueberries", nil
+				},
+				progress:        &stubProgressIndicator{},
+				disableProgress: true,
+			},
+			httpStub: func(r *httpmock.Registry) {
+				r.Register(
+					httpmock.GraphQL(`query PullRequestByNumber\b`),
+					httpmock.StringResponse(`{"data":{"repository":{
+						"pullRequest":{"number":13}
+					}}}`))
+			},
+			wantPR:          13,
+			wantRepo:        "https://github.com/ORIGINOWNER/REPO",
+			wantUseProgress: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -739,11 +895,25 @@ func TestFind(t *testing.T) {
 				}, nil),
 			}
 
+			if tt.args.progress != nil {
+				f.progress = tt.args.progress
+			}
+
 			pr, repo, err := f.Find(FindOptions{
-				Selector:   tt.args.selector,
-				Fields:     tt.args.fields,
-				BaseBranch: tt.args.baseBranch,
+				Selector:        tt.args.selector,
+				Fields:          tt.args.fields,
+				BaseBranch:      tt.args.baseBranch,
+				DisableProgress: tt.args.disableProgress,
 			})
+
+			if tt.args.progress != nil {
+				if tt.args.progress.startCalled != tt.wantUseProgress {
+					t.Errorf("progress was (not) used as expected")
+				} else if tt.args.progress.startCalled != tt.args.progress.stopCalled {
+					t.Errorf("progress was started but not stopped")
+				}
+			}
+
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Find() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -838,4 +1008,17 @@ func (s stubGitConfigClient) PushRevision(ctx context.Context, branchName string
 		panic("unexpected call to PushRevision")
 	}
 	return s.pushRevisionFn(ctx, branchName)
+}
+
+type stubProgressIndicator struct {
+	startCalled bool
+	stopCalled  bool
+}
+
+func (s *stubProgressIndicator) StartProgressIndicator() {
+	s.startCalled = true
+}
+
+func (s *stubProgressIndicator) StopProgressIndicator() {
+	s.stopCalled = true
 }

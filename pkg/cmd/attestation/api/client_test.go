@@ -5,7 +5,6 @@ import (
 
 	"github.com/cli/cli/v2/pkg/cmd/attestation/io"
 	"github.com/cli/cli/v2/pkg/cmd/attestation/test/data"
-
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,7 +16,8 @@ const (
 
 func NewClientWithMockGHClient(hasNextPage bool) Client {
 	fetcher := mockDataGenerator{
-		NumAttestations: 5,
+		NumUserAttestations:   5,
+		NumGitHubAttestations: 4,
 	}
 	l := io.NewTestHandler()
 
@@ -47,12 +47,21 @@ var testFetchParamsWithOwner = FetchParams{
 	Limit:         DefaultLimit,
 	Owner:         testOwner,
 	PredicateType: "https://slsa.dev/provenance/v1",
+	Initiator:     "user",
 }
 var testFetchParamsWithRepo = FetchParams{
 	Digest:        testDigest,
 	Limit:         DefaultLimit,
 	Repo:          testRepo,
 	PredicateType: "https://slsa.dev/provenance/v1",
+	Initiator:     "user",
+}
+
+var testFetchParamsWithRepoWithGitHubInitiator = FetchParams{
+	Digest:    testDigest,
+	Limit:     DefaultLimit,
+	Repo:      testRepo,
+	Initiator: "github",
 }
 
 type getByTestCase struct {
@@ -93,6 +102,11 @@ var getByTestCases = []getByTestCase{
 		expectedAttestations: 7,
 		hasNextPage:          true,
 	},
+	{
+		name:                 "get by digest with repo and GitHub initiator",
+		params:               testFetchParamsWithRepoWithGitHubInitiator,
+		expectedAttestations: 4,
+	},
 }
 
 func TestGetByDigest(t *testing.T) {
@@ -115,7 +129,7 @@ func TestGetByDigest(t *testing.T) {
 
 func TestGetByDigest_NoAttestationsFound(t *testing.T) {
 	fetcher := mockDataGenerator{
-		NumAttestations: 5,
+		NumUserAttestations: 5,
 	}
 
 	httpClient := &mockHttpClient{}
@@ -135,7 +149,7 @@ func TestGetByDigest_NoAttestationsFound(t *testing.T) {
 
 func TestGetByDigest_Error(t *testing.T) {
 	fetcher := mockDataGenerator{
-		NumAttestations: 5,
+		NumUserAttestations: 5,
 	}
 
 	c := LiveClient{
@@ -339,7 +353,7 @@ func TestGetAttestationsRetries(t *testing.T) {
 	getAttestationRetryInterval = 0
 
 	fetcher := mockDataGenerator{
-		NumAttestations: 5,
+		NumUserAttestations: 5,
 	}
 
 	c := &LiveClient{
@@ -369,7 +383,7 @@ func TestGetAttestationsMaxRetries(t *testing.T) {
 	getAttestationRetryInterval = 0
 
 	fetcher := mockDataGenerator{
-		NumAttestations: 5,
+		NumUserAttestations: 5,
 	}
 
 	c := &LiveClient{

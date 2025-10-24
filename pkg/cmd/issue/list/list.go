@@ -58,12 +58,18 @@ func NewCmdList(f *cmdutil.Factory, runF func(*ListOptions) error) *cobra.Comman
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List issues in a repository",
-		Long: heredoc.Doc(`
+		// TODO advancedIssueSearchCleanup
+		// Update the links and remove the mention at GHES 3.17 version.
+		Long: heredoc.Docf(`
 			List issues in a GitHub repository. By default, this only lists open issues.
 
 			The search query syntax is documented here:
 			<https://docs.github.com/en/search-github/searching-on-github/searching-issues-and-pull-requests>
-		`),
+
+			On supported GitHub hosts, advanced issue search syntax can be used in the
+			%[1]s--search%[1]s query. For more information about advanced issue search, see:
+			<https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/filtering-and-searching-issues-and-pull-requests#building-advanced-filters-for-issues>
+		`, "`"),
 		Example: heredoc.Doc(`
 			$ gh issue list --label "bug" --label "help wanted"
 			$ gh issue list --author monalisa
@@ -165,8 +171,21 @@ func listRun(opts *ListOptions) error {
 	isTerminal := opts.IO.IsStdoutTTY()
 
 	if opts.WebMode {
+		// TODO advancedIssueSearchCleanup
+		// We won't need feature detection when GHES 3.17 support ends, since
+		// the advanced issue search is the only available search backend for
+		// issues, and the GUI (i.e. Issues tab of repos) already supports the
+		// advanced syntax.
+		searchFeatures, err := opts.Detector.SearchFeatures()
+		if err != nil {
+			return err
+		}
+
 		issueListURL := ghrepo.GenerateRepoURL(baseRepo, "issues")
-		openURL, err := prShared.ListURLWithQuery(issueListURL, filterOptions)
+
+		// Note that if the advanced issue search API is available, the syntax is
+		// also supported in the Issues tab.
+		openURL, err := prShared.ListURLWithQuery(issueListURL, filterOptions, searchFeatures.AdvancedIssueSearchAPI)
 		if err != nil {
 			return err
 		}
@@ -181,7 +200,7 @@ func listRun(opts *ListOptions) error {
 		filterOptions.Fields = opts.Exporter.Fields()
 	}
 
-	listResult, err := issueList(httpClient, baseRepo, filterOptions, opts.LimitResults)
+	listResult, err := issueList(httpClient, opts.Detector, baseRepo, filterOptions, opts.LimitResults)
 	if err != nil {
 		return err
 	}
@@ -212,7 +231,7 @@ func listRun(opts *ListOptions) error {
 	return nil
 }
 
-func issueList(client *http.Client, repo ghrepo.Interface, filters prShared.FilterOptions, limit int) (*api.IssuesAndTotalCount, error) {
+func issueList(client *http.Client, detector fd.Detector, repo ghrepo.Interface, filters prShared.FilterOptions, limit int) (*api.IssuesAndTotalCount, error) {
 	apiClient := api.NewClientFromHTTP(client)
 
 	if filters.Search != "" || len(filters.Labels) > 0 || filters.Milestone != "" {
@@ -224,7 +243,7 @@ func issueList(client *http.Client, repo ghrepo.Interface, filters prShared.Filt
 			filters.Milestone = milestone.Title
 		}
 
-		return searchIssues(apiClient, repo, filters, limit)
+		return searchIssues(apiClient, detector, repo, filters, limit)
 	}
 
 	var err error

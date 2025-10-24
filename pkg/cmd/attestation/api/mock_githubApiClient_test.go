@@ -27,7 +27,8 @@ func (m mockAPIClient) REST(hostname, method, p string, body io.Reader, data int
 
 type mockDataGenerator struct {
 	mock.Mock
-	NumAttestations int
+	NumUserAttestations   int
+	NumGitHubAttestations int
 }
 
 func (m *mockDataGenerator) OnRESTSuccess(hostname, method, p string, body io.Reader, data interface{}) (string, error) {
@@ -76,12 +77,15 @@ func (m *mockDataGenerator) OnREST500ErrorHandler() func(hostname, method, p str
 }
 
 func (m *mockDataGenerator) OnRESTWithNextSuccessHelper(hostname, method, p string, body io.Reader, data interface{}, hasNext bool) (string, error) {
-	atts := make([]*Attestation, m.NumAttestations)
-	for j := 0; j < m.NumAttestations; j++ {
+	atts := make([]*Attestation, m.NumUserAttestations+m.NumGitHubAttestations)
+	for j := 0; j < m.NumUserAttestations; j++ {
 		att := makeTestAttestation()
 		atts[j] = &att
 	}
-
+	for j := m.NumUserAttestations; j < m.NumUserAttestations+m.NumGitHubAttestations; j++ {
+		att := makeTestReleaseAttestation()
+		atts[j] = &att
+	}
 	resp := AttestationsResponse{
 		Attestations: atts,
 	}

@@ -186,20 +186,20 @@ func (opts *FilterOptions) IsDefault() bool {
 	return true
 }
 
-func ListURLWithQuery(listURL string, options FilterOptions) (string, error) {
+func ListURLWithQuery(listURL string, options FilterOptions, advancedIssueSearchSyntax bool) (string, error) {
 	u, err := url.Parse(listURL)
 	if err != nil {
 		return "", err
 	}
 
 	params := u.Query()
-	params.Set("q", SearchQueryBuild(options))
+	params.Set("q", SearchQueryBuild(options, advancedIssueSearchSyntax))
 	u.RawQuery = params.Encode()
 
 	return u.String(), nil
 }
 
-func SearchQueryBuild(options FilterOptions) string {
+func SearchQueryBuild(options FilterOptions, advancedIssueSearchSyntax bool) string {
 	var is, state string
 	switch options.State {
 	case "open", "closed":
@@ -207,7 +207,7 @@ func SearchQueryBuild(options FilterOptions) string {
 	case "merged":
 		is = "merged"
 	}
-	q := search.Query{
+	query := search.Query{
 		Qualifiers: search.Qualifiers{
 			Assignee:  options.Assignee,
 			Author:    options.Author,
@@ -223,10 +223,18 @@ func SearchQueryBuild(options FilterOptions) string {
 			Type:      options.Entity,
 		},
 	}
-	if options.Search != "" {
-		return fmt.Sprintf("%s %s", options.Search, q.String())
+
+	var q string
+	if advancedIssueSearchSyntax {
+		q = query.AdvancedIssueSearchString()
+	} else {
+		q = query.StandardSearchString()
 	}
-	return q.String()
+
+	if options.Search != "" {
+		return fmt.Sprintf("%s %s", options.Search, q)
+	}
+	return q
 }
 
 func QueryHasStateClause(searchQuery string) bool {

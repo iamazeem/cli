@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/MakeNowJust/heredoc"
+	fd "github.com/cli/cli/v2/internal/featuredetection"
 	"github.com/cli/cli/v2/pkg/httpmock"
 	"github.com/stretchr/testify/assert"
 )
@@ -265,7 +266,7 @@ func TestSearcherCode(t *testing.T) {
 			if tt.host == "" {
 				tt.host = "github.com"
 			}
-			searcher := NewSearcher(client, tt.host)
+			searcher := NewSearcher(client, tt.host, &fd.DisabledDetectorMock{})
 			result, err := searcher.Code(tt.query)
 			if tt.wantErr {
 				assert.EqualError(t, err, tt.errMsg)
@@ -551,7 +552,7 @@ func TestSearcherCommits(t *testing.T) {
 			if tt.host == "" {
 				tt.host = "github.com"
 			}
-			searcher := NewSearcher(client, tt.host)
+			searcher := NewSearcher(client, tt.host, &fd.DisabledDetectorMock{})
 			result, err := searcher.Commits(tt.query)
 			if tt.wantErr {
 				assert.EqualError(t, err, tt.errMsg)
@@ -837,7 +838,7 @@ func TestSearcherRepositories(t *testing.T) {
 			if tt.host == "" {
 				tt.host = "github.com"
 			}
-			searcher := NewSearcher(client, tt.host)
+			searcher := NewSearcher(client, tt.host, &fd.DisabledDetectorMock{})
 			result, err := searcher.Repositories(tt.query)
 			if tt.wantErr {
 				assert.EqualError(t, err, tt.errMsg)
@@ -1123,7 +1124,7 @@ func TestSearcherIssues(t *testing.T) {
 			if tt.host == "" {
 				tt.host = "github.com"
 			}
-			searcher := NewSearcher(client, tt.host)
+			searcher := NewSearcher(client, tt.host, fd.AdvancedIssueSearchUnsupported())
 			result, err := searcher.Issues(tt.query)
 			if tt.wantErr {
 				assert.EqualError(t, err, tt.errMsg)
@@ -1131,6 +1132,88 @@ func TestSearcherIssues(t *testing.T) {
 			}
 			assert.NoError(t, err)
 			assert.Equal(t, tt.result, result)
+		})
+	}
+}
+
+func TestSearcherIssuesAdvancedSyntax(t *testing.T) {
+	query := Query{
+		Kind:     KindIssues,
+		Limit:    1,
+		Keywords: []string{"keyword"},
+		Qualifiers: Qualifiers{
+			// Ordinary qualifiers
+			Author: "johndoe",
+			Label:  []string{"foo", "bar"},
+			// Special qualifiers (that should be grouped and OR-ed when using advanced issue search)
+			Repo: []string{"foo/bar", "foo/baz"},
+			Is:   []string{"private", "public"},
+			User: []string{"johndoe", "janedoe"},
+			In:   []string{"title", "body", "comments"},
+		},
+	}
+
+	tests := []struct {
+		name       string
+		query      Query
+		detector   fd.Detector
+		wantValues url.Values
+		wantErr    string
+	}{
+		{
+			// TODO advancedIssueSearchCleanup
+			// Remove this test case once GHES 3.17 support ends.
+			name:     "advanced issue search not supported",
+			detector: fd.AdvancedIssueSearchUnsupported(),
+			query:    query,
+			wantValues: url.Values{
+				"q":               []string{"keyword author:johndoe in:body in:comments in:title is:private is:public label:bar label:foo repo:foo/bar repo:foo/baz user:janedoe user:johndoe"},
+				"advanced_search": nil, // assert absence
+			},
+		},
+		{
+			// TODO advancedIssueSearchCleanup
+			// Remove this test case once GHES 3.17 support ends.
+			name:     "advanced issue search supported as an opt-in feature",
+			detector: fd.AdvancedIssueSearchSupportedAsOptIn(),
+			query:    query,
+			wantValues: url.Values{
+				"q":               []string{"keyword author:johndoe (in:body OR in:comments OR in:title) (is:private OR is:public) label:bar label:foo (repo:foo/bar OR repo:foo/baz) (user:janedoe OR user:johndoe)"},
+				"advanced_search": []string{"true"}, // opt-in
+			},
+		},
+		{
+			// TODO advancedIssueSearchCleanup
+			// No need for feature detection once GHES 3.17 support ends.
+			name:     "advanced issue search supported as the only search backend",
+			detector: fd.AdvancedIssueSearchSupportedAsOnlyBackend(),
+			query:    query,
+			wantValues: url.Values{
+				"q":               []string{"keyword author:johndoe (in:body OR in:comments OR in:title) (is:private OR is:public) label:bar label:foo (repo:foo/bar OR repo:foo/baz) (user:janedoe OR user:johndoe)"},
+				"advanced_search": nil, // assert absence
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+
+			reg.Register(
+				httpmock.QueryMatcher("GET", "search/issues", tt.wantValues),
+				httpmock.JSONResponse(IssuesResult{}),
+			)
+
+			client := &http.Client{Transport: reg}
+			searcher := NewSearcher(client, "github.com", tt.detector)
+
+			_, err := searcher.Issues(tt.query)
+			if tt.wantErr != "" {
+				assert.EqualError(t, err, tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
 		})
 	}
 }
@@ -1179,7 +1262,7 @@ func TestSearcherURL(t *testing.T) {
 			if tt.host == "" {
 				tt.host = "github.com"
 			}
-			searcher := NewSearcher(nil, tt.host)
+			searcher := NewSearcher(nil, tt.host, nil)
 			assert.Equal(t, tt.url, searcher.URL(tt.query))
 		})
 	}
