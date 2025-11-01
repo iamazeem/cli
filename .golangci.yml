@@ -15,6 +15,9 @@ linters:
 formatters:
   enable:
     - gofmt
+  exclusions:
+    paths:
+      - third-party
 
 issues:
   max-issues-per-linter: 0
