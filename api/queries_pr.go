@@ -637,6 +637,14 @@ func AddPullRequestReviews(client *Client, repo ghrepo.Interface, prNumber int, 
 		return nil
 	}
 
+	// The API requires empty arrays instead of null values
+	if users == nil {
+		users = []string{}
+	}
+	if teams == nil {
+		teams = []string{}
+	}
+
 	path := fmt.Sprintf(
 		"repos/%s/%s/pulls/%d/requested_reviewers",
 		url.PathEscape(repo.RepoOwner()),
@@ -644,8 +652,8 @@ func AddPullRequestReviews(client *Client, repo ghrepo.Interface, prNumber int, 
 		prNumber,
 	)
 	body := struct {
-		Reviewers     []string `json:"reviewers,omitempty"`
-		TeamReviewers []string `json:"team_reviewers,omitempty"`
+		Reviewers     []string `json:"reviewers"`
+		TeamReviewers []string `json:"team_reviewers"`
 	}{
 		Reviewers:     users,
 		TeamReviewers: teams,
@@ -664,6 +672,14 @@ func RemovePullRequestReviews(client *Client, repo ghrepo.Interface, prNumber in
 		return nil
 	}
 
+	// The API requires empty arrays instead of null values
+	if users == nil {
+		users = []string{}
+	}
+	if teams == nil {
+		teams = []string{}
+	}
+
 	path := fmt.Sprintf(
 		"repos/%s/%s/pulls/%d/requested_reviewers",
 		url.PathEscape(repo.RepoOwner()),
@@ -671,8 +687,8 @@ func RemovePullRequestReviews(client *Client, repo ghrepo.Interface, prNumber in
 		prNumber,
 	)
 	body := struct {
-		Reviewers     []string `json:"reviewers,omitempty"`
-		TeamReviewers []string `json:"team_reviewers,omitempty"`
+		Reviewers     []string `json:"reviewers"`
+		TeamReviewers []string `json:"team_reviewers"`
 	}{
 		Reviewers:     users,
 		TeamReviewers: teams,
