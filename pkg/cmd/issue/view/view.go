@@ -144,8 +144,6 @@ func viewRun(opts *ViewOptions) error {
 	}
 
 	if lookupFields.Contains("comments") {
-		// FIXME: this re-fetches the comments connection even though the initial set of 100 were
-		// fetched in the previous request.
 		err := preloadIssueComments(httpClient, baseRepo, issue)
 		if err != nil {
 			return err
@@ -199,7 +197,7 @@ func printRawIssuePreview(out io.Writer, issue *api.Issue) error {
 	// processing many issues with head and grep.
 	fmt.Fprintf(out, "title:\t%s\n", issue.Title)
 	fmt.Fprintf(out, "state:\t%s\n", issue.State)
-	fmt.Fprintf(out, "author:\t%s\n", issue.Author.Login)
+	fmt.Fprintf(out, "author:\t%s\n", issue.Author.DisplayName())
 	fmt.Fprintf(out, "labels:\t%s\n", labels)
 	fmt.Fprintf(out, "comments:\t%d\n", issue.Comments.TotalCount)
 	fmt.Fprintf(out, "assignees:\t%s\n", assignees)
@@ -224,7 +222,7 @@ func printHumanIssuePreview(opts *ViewOptions, baseRepo ghrepo.Interface, issue 
 	fmt.Fprintf(out,
 		"%s • %s opened %s • %s\n",
 		issueStateTitleWithColor(cs, issue),
-		issue.Author.Login,
+		issue.Author.DisplayName(),
 		text.FuzzyAgo(opts.Now(), issue.CreatedAt),
 		text.Pluralize(issue.Comments.TotalCount, "comment"),
 	)
@@ -300,7 +298,7 @@ func issueAssigneeList(issue api.Issue) string {
 
 	AssigneeNames := make([]string, 0, len(issue.Assignees.Nodes))
 	for _, assignee := range issue.Assignees.Nodes {
-		AssigneeNames = append(AssigneeNames, assignee.Login)
+		AssigneeNames = append(AssigneeNames, assignee.DisplayName())
 	}
 
 	list := strings.Join(AssigneeNames, ", ")

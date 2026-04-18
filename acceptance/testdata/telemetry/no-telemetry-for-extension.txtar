@@ -1,0 +1,27 @@
+# Extensions should not generate telemetry events
+[!exec:bash] skip
+
+env GH_PRIVATE_ENABLE_TELEMETRY=1
+env GH_TELEMETRY=log
+env GH_TELEMETRY_SAMPLE_RATE=100
+
+# Create a local shell extension repository
+exec git init gh-hello
+cp gh-hello.sh gh-hello/gh-hello
+chmod 755 gh-hello/gh-hello
+exec git -C gh-hello add gh-hello
+exec git -C gh-hello commit -m 'init'
+
+# Install it locally
+cd gh-hello
+exec gh ext install .
+cd $WORK
+
+# Run the extension and verify no telemetry is logged
+exec gh hello
+stdout 'hello from extension'
+! stderr 'Telemetry payload:'
+
+-- gh-hello.sh --
+#!/usr/bin/env bash
+echo "hello from extension"

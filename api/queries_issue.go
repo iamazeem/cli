@@ -234,6 +234,11 @@ type Author struct {
 	Login string
 }
 
+// DisplayName returns a user-friendly name via actorDisplayName.
+func (a Author) DisplayName() string {
+	return actorDisplayName("", a.Login, a.Name)
+}
+
 func (author Author) MarshalJSON() ([]byte, error) {
 	if author.ID == "" {
 		return json.Marshal(map[string]interface{}{
@@ -260,6 +265,11 @@ type CommentAuthor struct {
 	//	} `graphql:"... on User"`
 }
 
+// DisplayName returns a user-friendly name via actorDisplayName.
+func (a CommentAuthor) DisplayName() string {
+	return actorDisplayName("", a.Login, "")
+}
+
 // IssueCreate creates an issue in a GitHub repository
 func IssueCreate(client *Client, repo *Repository, params map[string]interface{}) (*Issue, error) {
 	query := `
@@ -279,7 +289,8 @@ func IssueCreate(client *Client, repo *Repository, params map[string]interface{}
 		switch key {
 		case "assigneeIds", "body", "issueTemplate", "labelIds", "milestoneId", "projectIds", "repositoryId", "title":
 			inputParams[key] = val
-		case "projectV2Ids":
+		case "projectV2Ids", "assigneeLogins":
+			// handled after issue creation
 		default:
 			return nil, fmt.Errorf("invalid IssueCreate mutation parameter %s", key)
 		}
@@ -299,6 +310,14 @@ func IssueCreate(client *Client, repo *Repository, params map[string]interface{}
 		return nil, err
 	}
 	issue := &result.CreateIssue.Issue
+
+	// Assign users using login-based mutation when ApiActorsSupported is true (github.com).
+	if assigneeLogins, ok := params["assigneeLogins"].([]string); ok && len(assigneeLogins) > 0 {
+		err := ReplaceActorsForAssignableByLogin(client, repo, issue.ID, assigneeLogins)
+		if err != nil {
+			return issue, err
+		}
+	}
 
 	// projectV2 parameters aren't supported in the `createIssue` mutation,
 	// so add them after the issue has been created.

@@ -18,6 +18,10 @@
 # Windows resource files
 /cmd/gh/*.syso
 
+# Third-party licenses
+/internal/licenses/embed/*/*
+!/internal/licenses/embed/*/PLACEHOLDER
+
 # VS Code
 .vscode
 
@@ -34,3 +38,8 @@
 *~
 
 vendor/
+gh
+
+# Test coverage artifacts
+coverage.out
+lcov.info

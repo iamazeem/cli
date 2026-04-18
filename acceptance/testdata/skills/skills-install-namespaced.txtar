@@ -1,0 +1,60 @@
+# Two namespaced skills with the same base name in the same repo should
+# be independently installable using path-based disambiguation.
+
+# Use gh as a credential helper
+exec gh auth setup-git
+
+# Create a repo with two namespaced skills that share the name "deploy"
+exec gh repo create $ORG/$SCRIPT_NAME-$RANDOM_STRING --public --add-readme
+defer gh repo delete --yes $ORG/$SCRIPT_NAME-$RANDOM_STRING
+
+exec gh repo clone $ORG/$SCRIPT_NAME-$RANDOM_STRING
+cd $SCRIPT_NAME-$RANDOM_STRING
+
+mkdir -p skills/alice/deploy
+mkdir -p skills/bob/deploy
+cp $WORK/alice-skill.md skills/alice/deploy/SKILL.md
+cp $WORK/bob-skill.md skills/bob/deploy/SKILL.md
+
+exec git add -A
+exec git commit -m 'Add namespaced skills'
+exec git push origin main
+
+# Publish so the skills are discoverable
+exec gh skill publish --tag v1.0.0
+
+# Install alice's deploy skill using the full path to disambiguate
+exec gh skill install $ORG/$SCRIPT_NAME-$RANDOM_STRING skills/alice/deploy --scope user --force
+stdout 'Installed alice/deploy'
+
+# Install bob's deploy skill using the full path
+exec gh skill install $ORG/$SCRIPT_NAME-$RANDOM_STRING skills/bob/deploy --scope user --force
+stdout 'Installed bob/deploy'
+
+# Verify both were installed to separate directories
+exists $HOME/.copilot/skills/alice/deploy/SKILL.md
+exists $HOME/.copilot/skills/bob/deploy/SKILL.md
+
+# Verify each has the correct content
+grep 'Alice' $HOME/.copilot/skills/alice/deploy/SKILL.md
+grep 'Bob' $HOME/.copilot/skills/bob/deploy/SKILL.md
+
+-- alice-skill.md --
+---
+name: deploy
+description: Alice's deployment skill
+---
+
+# Deploy by Alice
+
+Deploys infrastructure using Alice's conventions.
+
+-- bob-skill.md --
+---
+name: deploy
+description: Bob's deployment skill
+---
+
+# Deploy by Bob
+
+Deploys infrastructure using Bob's conventions.

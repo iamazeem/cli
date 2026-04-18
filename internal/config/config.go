@@ -31,6 +31,7 @@ const (
 	promptKey             = "prompt"
 	preferEditorPromptKey = "prefer_editor_prompt"
 	spinnerKey            = "spinner"
+	telemetryKey          = "telemetry"
 	userKey               = "user"
 	usersKey              = "users"
 	versionKey            = "version"
@@ -167,6 +168,11 @@ func (c *cfg) PreferEditorPrompt(hostname string) gh.ConfigEntry {
 func (c *cfg) Spinner(hostname string) gh.ConfigEntry {
 	// Intentionally panic if there is no user provided value or default value (which would be a programmer error)
 	return c.GetOrDefault(hostname, spinnerKey).Unwrap()
+}
+
+func (c *cfg) Telemetry() gh.ConfigEntry {
+	// Intentionally panic if there is no user provided value or default value (which would be a programmer error)
+	return c.GetOrDefault("", telemetryKey).Unwrap()
 }
 
 func (c *cfg) Version() o.Option[string] {
@@ -680,6 +686,15 @@ var Options = []ConfigOption{
 		AllowedValues: []string{"enabled", "disabled"},
 		CurrentValue: func(c gh.Config, hostname string) string {
 			return c.Spinner(hostname).Value
+		},
+	},
+	{
+		Key:           telemetryKey,
+		Description:   "whether telemetry is enabled, disabled, or logging",
+		DefaultValue:  "enabled",
+		AllowedValues: []string{"enabled", "disabled", "log"},
+		CurrentValue: func(c gh.Config, hostname string) string {
+			return c.Telemetry().Value
 		},
 	},
 }

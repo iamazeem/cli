@@ -11,7 +11,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/cli/cli/v2/api"
 	ioconfig "github.com/cli/cli/v2/pkg/cmd/attestation/io"
-	"github.com/golang/snappy"
+	"github.com/klauspost/compress/snappy"
 	v1 "github.com/sigstore/protobuf-specs/gen/pb-go/bundle/v1"
 	"github.com/sigstore/sigstore-go/pkg/bundle"
 	"golang.org/x/sync/errgroup"

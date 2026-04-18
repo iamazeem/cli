@@ -34,12 +34,13 @@ const (
 )
 
 type ApiOptions struct {
-	AppVersion string
-	BaseRepo   func() (ghrepo.Interface, error)
-	Branch     func() (string, error)
-	Config     func() (gh.Config, error)
-	HttpClient func() (*http.Client, error)
-	IO         *iostreams.IOStreams
+	AppVersion    string
+	InvokingAgent string
+	BaseRepo      func() (ghrepo.Interface, error)
+	Branch        func() (string, error)
+	Config        func() (gh.Config, error)
+	HttpClient    func() (*http.Client, error)
+	IO            *iostreams.IOStreams
 
 	Hostname            string
 	RequestMethod       string
@@ -62,11 +63,12 @@ type ApiOptions struct {
 
 func NewCmdApi(f *cmdutil.Factory, runF func(*ApiOptions) error) *cobra.Command {
 	opts := ApiOptions{
-		AppVersion: f.AppVersion,
-		BaseRepo:   f.BaseRepo,
-		Branch:     f.Branch,
-		Config:     f.Config,
-		IO:         f.IOStreams,
+		AppVersion:    f.AppVersion,
+		InvokingAgent: f.InvokingAgent,
+		BaseRepo:      f.BaseRepo,
+		Branch:        f.Branch,
+		Config:        f.Config,
+		IO:            f.IOStreams,
 	}
 
 	cmd := &cobra.Command{
@@ -221,7 +223,7 @@ func NewCmdApi(f *cmdutil.Factory, runF func(*ApiOptions) error) *cobra.Command 
 		},
 		Args: cobra.ExactArgs(1),
 		PreRun: func(c *cobra.Command, args []string) {
-			opts.BaseRepo = cmdutil.OverrideBaseRepoFunc(f, "")
+			opts.BaseRepo = cmdutil.OverrideBaseRepoFunc(f.BaseRepo, "")
 		},
 		RunE: func(c *cobra.Command, args []string) error {
 			opts.RequestPath = args[0]
@@ -385,6 +387,7 @@ func apiRun(opts *ApiOptions) error {
 			}
 			opts := api.HTTPClientOptions{
 				AppVersion:     opts.AppVersion,
+				InvokingAgent:  opts.InvokingAgent,
 				CacheTTL:       opts.CacheTTL,
 				Config:         cfg.Authentication(),
 				EnableCache:    opts.CacheTTL > 0,
@@ -456,6 +459,8 @@ func apiRun(opts *ApiOptions) error {
 	return tmpl.Flush()
 }
 
+var jsonContentTypeRE = regexp.MustCompile(`[/+]json(;|$)`)
+
 func processResponse(resp *http.Response, opts *ApiOptions, bodyWriter, headersWriter io.Writer, template *template.Template, isFirstPage, isLastPage bool) (endCursor string, err error) {
 	if opts.ShowResponseHeaders {
 		fmt.Fprintln(headersWriter, resp.Proto, resp.Status)
@@ -469,7 +474,7 @@ func processResponse(resp *http.Response, opts *ApiOptions, bodyWriter, headersW
 	var responseBody io.Reader = resp.Body
 	defer resp.Body.Close()
 
-	isJSON, _ := regexp.MatchString(`[/+]json(;|$)`, resp.Header.Get("Content-Type"))
+	isJSON := jsonContentTypeRE.MatchString(resp.Header.Get("Content-Type"))
 
 	var serverError string
 	if isJSON && (opts.RequestPath == "graphql" || resp.StatusCode >= 400) {

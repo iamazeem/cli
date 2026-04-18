@@ -38,6 +38,10 @@ completions: bin/gh$(EXE)
 	bin/gh$(EXE) completion -s fish > ./share/fish/vendor_completions.d/gh.fish
 	bin/gh$(EXE) completion -s zsh > ./share/zsh/site-functions/_gh
 
+.PHONY: lint
+lint:
+	golangci-lint run ./...
+
 # just convenience tasks around `go test`
 .PHONY: test
 test:
@@ -74,7 +78,7 @@ endif
 ## Install/uninstall tasks are here for use on *nix platform. On Windows, there is no equivalent.
 
 DESTDIR :=
-prefix  := /usr/local
+prefix  ?= /usr/local
 bindir  := ${prefix}/bin
 datadir := ${prefix}/share
 mandir  := ${datadir}/man
@@ -109,8 +113,8 @@ endif
 
 .PHONY: licenses
 licenses:
-	./script/licenses
+	./script/licenses $$(go env GOOS) $$(go env GOARCH)
 
 .PHONY: licenses-check
 licenses-check:
-	./script/licenses-check
+	./script/licenses --check

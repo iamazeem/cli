@@ -52,12 +52,12 @@ func EnableRepoOverride(cmd *cobra.Command, f *Factory) {
 			return err
 		}
 		repoOverride, _ := cmd.Flags().GetString("repo")
-		f.BaseRepo = OverrideBaseRepoFunc(f, repoOverride)
+		f.BaseRepo = OverrideBaseRepoFunc(f.BaseRepo, repoOverride)
 		return nil
 	}
 }
 
-func OverrideBaseRepoFunc(f *Factory, override string) func() (ghrepo.Interface, error) {
+func OverrideBaseRepoFunc(baseRepoFunc func() (ghrepo.Interface, error), override string) func() (ghrepo.Interface, error) {
 	if override == "" {
 		override = os.Getenv("GH_REPO")
 	}
@@ -66,5 +66,5 @@ func OverrideBaseRepoFunc(f *Factory, override string) func() (ghrepo.Interface,
 			return ghrepo.FromFullName(override)
 		}
 	}
-	return f.BaseRepo
+	return baseRepoFunc
 }

@@ -415,6 +415,7 @@ func NewCmdExtension(f *cmdutil.Factory) *cobra.Command {
 			}
 			cmd.Flags().BoolVar(&forceFlag, "force", false, "Force upgrade extension, or ignore if latest already installed")
 			cmd.Flags().StringVar(&pinFlag, "pin", "", "Pin extension to a release tag or commit ref")
+			cmdutil.DisableAuthCheck(cmd)
 			return cmd
 		}(),
 		func() *cobra.Command {

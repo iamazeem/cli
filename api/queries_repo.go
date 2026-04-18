@@ -147,6 +147,11 @@ type GitHubUser struct {
 	DatabaseID int64  `json:"databaseId"`
 }
 
+// DisplayName returns a user-friendly name via actorDisplayName.
+func (u GitHubUser) DisplayName() string {
+	return actorDisplayName("", u.Login, u.Name)
+}
+
 // Actor is a superset of User and Bot, among others.
 // At the time of writing, some of these fields
 // are not directly supported by the Actor type and
@@ -282,6 +287,47 @@ func FetchRepository(client *Client, repo ghrepo.Interface, fields []string) (*R
 		repository(owner: $owner, name: $name) {%s}
 	}`, RepositoryGraphQL(fields))
 
+	variables := map[string]interface{}{
+		"owner": repo.RepoOwner(),
+		"name":  repo.RepoName(),
+	}
+
+	var result struct {
+		Repository *Repository
+	}
+	if err := client.GraphQL(repo.RepoHost(), query, variables, &result); err != nil {
+		return nil, err
+	}
+	// The GraphQL API should have returned an error in case of a missing repository, but this isn't
+	// guaranteed to happen when an authentication token with insufficient permissions is being used.
+	if result.Repository == nil {
+		return nil, GraphQLError{
+			GraphQLError: &ghAPI.GraphQLError{
+				Errors: []ghAPI.GraphQLErrorItem{{
+					Type:    "NOT_FOUND",
+					Message: fmt.Sprintf("Could not resolve to a Repository with the name '%s/%s'.", repo.RepoOwner(), repo.RepoName()),
+				}},
+			},
+		}
+	}
+
+	return InitRepoHostname(result.Repository, repo.RepoHost()), nil
+}
+
+// IssueRepoInfo fetches only the repository fields needed for issue operations such as
+// issue creation and transfer, avoiding fields like defaultBranchRef that require additional
+// token permissions.
+func IssueRepoInfo(client *Client, repo ghrepo.Interface) (*Repository, error) {
+	query := `
+	query IssueRepositoryInfo($owner: String!, $name: String!) {
+		repository(owner: $owner, name: $name) {
+			id
+			name
+			owner { login }
+			hasIssuesEnabled
+			viewerPermission
+		}
+	}`
 	variables := map[string]interface{}{
 		"owner": repo.RepoOwner(),
 		"name":  repo.RepoName(),
@@ -917,14 +963,15 @@ func (m *RepoMetadataResult) Merge(m2 *RepoMetadataResult) {
 }
 
 type RepoMetadataInput struct {
-	Assignees      bool
-	ActorAssignees bool
-	Reviewers      bool
-	TeamReviewers  bool
-	Labels         bool
-	ProjectsV1     bool
-	ProjectsV2     bool
-	Milestones     bool
+	Assignees     bool
+	Reviewers     bool
+	TeamReviewers bool
+	// TODO ApiActorsSupported
+	ApiActorsSupported bool
+	Labels             bool
+	ProjectsV1         bool
+	ProjectsV2         bool
+	Milestones         bool
 }
 
 // RepoMetadata pre-fetches the metadata for attaching to issues and pull requests
@@ -933,7 +980,8 @@ func RepoMetadata(client *Client, repo ghrepo.Interface, input RepoMetadataInput
 	var g errgroup.Group
 
 	if input.Assignees || input.Reviewers {
-		if input.ActorAssignees {
+		// TODO ApiActorsSupported
+		if input.ApiActorsSupported {
 			g.Go(func() error {
 				actors, err := RepoAssignableActors(client, repo)
 				if err != nil {
@@ -1080,11 +1128,30 @@ func RepoProjects(client *Client, repo ghrepo.Interface) ([]RepoProject, error) 
 	return projects, nil
 }
 
-// Expected login for Copilot when retrieved as an Actor
-// This is returned from assignable actors and issue/pr assigned actors.
-// We use this to check if the actor is Copilot.
-const CopilotActorLogin = "copilot-swe-agent"
+// Expected login for Copilot when retrieved as an assignee
+const CopilotAssigneeLogin = "copilot-swe-agent"
+
+// Expected login for Copilot when retrieved as a Pull Request Reviewer.
+const CopilotReviewerLogin = "copilot-pull-request-reviewer"
 const CopilotActorName = "Copilot"
+
+// actorDisplayName returns a user-friendly display name for any actor.
+// It handles bots (e.g. Copilot → "Copilot (AI)"), users with names
+// ("login (Name)"), and falls back to just login. Empty typeName is
+// treated as a possible bot or user — the login is checked against
+// known bot logins first.
+func actorDisplayName(typeName, login, name string) string {
+	if login == CopilotReviewerLogin || login == CopilotAssigneeLogin || login == CopilotActorName {
+		return fmt.Sprintf("%s (AI)", CopilotActorName)
+	}
+	if typeName == botTypeName {
+		return login
+	}
+	if name != "" {
+		return fmt.Sprintf("%s (%s)", login, name)
+	}
+	return login
+}
 
 type AssignableActor interface {
 	DisplayName() string
@@ -1109,12 +1176,9 @@ func NewAssignableUser(id, login, name string) AssignableUser {
 	}
 }
 
-// DisplayName returns a formatted string that uses Login and Name to be displayed e.g. 'Login (Name)' or 'Login'
+// DisplayName returns a user-friendly name via actorDisplayName.
 func (u AssignableUser) DisplayName() string {
-	if u.name != "" {
-		return fmt.Sprintf("%s (%s)", u.login, u.name)
-	}
-	return u.login
+	return actorDisplayName(userTypeName, u.login, u.name)
 }
 
 func (u AssignableUser) ID() string {
@@ -1144,10 +1208,7 @@ func NewAssignableBot(id, login string) AssignableBot {
 }
 
 func (b AssignableBot) DisplayName() string {
-	if b.login == CopilotActorLogin {
-		return fmt.Sprintf("%s (AI)", CopilotActorName)
-	}
-	return b.Login()
+	return actorDisplayName(botTypeName, b.login, "")
 }
 
 func (b AssignableBot) ID() string {
@@ -1278,6 +1339,69 @@ func RepoAssignableActors(client *Client, repo ghrepo.Interface) ([]AssignableAc
 		variables["endCursor"] = githubv4.String(query.Repository.SuggestedActors.PageInfo.EndCursor)
 	}
 	return actors, nil
+}
+
+// SearchRepoAssignableActors searches assignable actors for a repository with an optional
+// query string. Unlike RepoAssignableActors which fetches all actors with pagination, this
+// returns up to 10 results matching the query, suitable for search-based selection.
+func SearchRepoAssignableActors(client *Client, repo ghrepo.Interface, query string) ([]AssignableActor, int, error) {
+	type responseData struct {
+		Repository struct {
+			AssignableUsers struct {
+				TotalCount int
+			}
+			SuggestedActors struct {
+				Nodes []struct {
+					User struct {
+						ID       string
+						Login    string
+						Name     string
+						TypeName string `graphql:"__typename"`
+					} `graphql:"... on User"`
+					Bot struct {
+						ID       string
+						Login    string
+						TypeName string `graphql:"__typename"`
+					} `graphql:"... on Bot"`
+				}
+			} `graphql:"suggestedActors(first: 10, query: $query, capabilities: CAN_BE_ASSIGNED)"`
+		} `graphql:"repository(owner: $owner, name: $name)"`
+	}
+
+	var q *githubv4.String
+	if query != "" {
+		v := githubv4.String(query)
+		q = &v
+	}
+
+	variables := map[string]interface{}{
+		"owner": githubv4.String(repo.RepoOwner()),
+		"name":  githubv4.String(repo.RepoName()),
+		"query": q,
+	}
+
+	var result responseData
+	if err := client.Query(repo.RepoHost(), "SearchRepoAssignableActors", &result, variables); err != nil {
+		return nil, 0, err
+	}
+
+	var actors []AssignableActor
+	for _, node := range result.Repository.SuggestedActors.Nodes {
+		if node.User.TypeName == "User" {
+			actors = append(actors, AssignableUser{
+				id:    node.User.ID,
+				login: node.User.Login,
+				name:  node.User.Name,
+			})
+		} else if node.Bot.TypeName == "Bot" {
+			actors = append(actors, AssignableBot{
+				id:    node.Bot.ID,
+				login: node.Bot.Login,
+			})
+		}
+	}
+
+	return actors, result.Repository.AssignableUsers.TotalCount, nil
 }
 
 type RepoLabel struct {

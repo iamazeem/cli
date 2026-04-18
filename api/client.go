@@ -15,7 +15,8 @@ import (
 )
 
 const (
-	accept          = "Accept"
+	apiVersion      = "X-GitHub-Api-Version"
+	apiVersionValue = "2022-11-28"
 	authorization   = "Authorization"
 	cacheTTL        = "X-GH-CACHE-TTL"
 	graphqlFeatures = "GraphQL-Features"
@@ -264,6 +265,7 @@ func clientOptions(hostname string, transport http.RoundTripper) ghAPI.ClientOpt
 		AuthToken: "none",
 		Headers: map[string]string{
 			authorization: "",
+			apiVersion:    apiVersionValue,
 		},
 		Host:               hostname,
 		SkipDefaultHeaders: true,
