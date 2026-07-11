@@ -96,6 +96,9 @@ func (e authEntry) String(cs *iostreams.ColorScheme) string {
 		sb.WriteString(fmt.Sprintf("  - The token in %s is invalid.\n", e.TokenSource))
 		if authTokenWriteable(e.TokenSource) {
 			loginInstructions := fmt.Sprintf("gh auth login -h %s", e.Host)
+			if shared.AuthTokenRefreshable(e.Token, e.TokenSource) {
+				loginInstructions = fmt.Sprintf("gh auth refresh -h %s", e.Host)
+			}
 			logoutInstructions := fmt.Sprintf("gh auth logout -h %s -u %s", e.Host, e.Login)
 			sb.WriteString(fmt.Sprintf("  - To re-authenticate, run: %s\n", cs.Bold(loginInstructions)))
 			sb.WriteString(fmt.Sprintf("  - To forget about this account, run: %s\n", cs.Bold(logoutInstructions)))

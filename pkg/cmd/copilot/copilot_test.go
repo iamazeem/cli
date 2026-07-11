@@ -10,10 +10,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
 
+	"github.com/cli/cli/v2/internal/gh/ghtelemetry"
+	"github.com/cli/cli/v2/internal/telemetry"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/httpmock"
 	"github.com/cli/cli/v2/pkg/iostreams"
@@ -110,7 +113,7 @@ func TestNewCmdCopilot(t *testing.T) {
 			assert.NoError(t, err)
 
 			var gotOpts *CopilotOptions
-			cmd := NewCmdCopilot(f, func(opts *CopilotOptions) error {
+			cmd := NewCmdCopilot(f, &telemetry.CommandRecorderSpy{}, func(opts *CopilotOptions) error {
 				gotOpts = opts
 				return nil
 			})
@@ -585,4 +588,46 @@ func TestDownloadCopilot(t *testing.T) {
 		require.NoError(t, err, "downloadCopilot() error")
 		require.Equal(t, localPath, path, "downloadCopilot() path mismatch")
 	})
+}
+
+func TestRunCopilot_execFailureHint(t *testing.T) {
+	ios, _, _, _ := iostreams.Test()
+	opts := &CopilotOptions{
+		IO:          ios,
+		CopilotArgs: []string{},
+	}
+
+	origFind := findCopilotBinaryFunc
+	findCopilotBinaryFunc = func() string {
+		return "/usr/bin/copilot"
+	}
+	t.Cleanup(func() { findCopilotBinaryFunc = origFind })
+
+	execErr := fmt.Errorf("exec failed: something went wrong")
+	origRun := runExternalCmdFunc
+	runExternalCmdFunc = func(_ *exec.Cmd) error {
+		return execErr
+	}
+	t.Cleanup(func() { runExternalCmdFunc = origRun })
+
+	err := runCopilot(opts)
+	require.Error(t, err)
+	require.ErrorIs(t, err, execErr)
+	require.Contains(t, err.Error(), "try running `copilot` directly without `gh`.")
+}
+
+func TestCopilotCommandIsSampledAt100(t *testing.T) {
+	spy := &telemetry.CommandRecorderSpy{}
+	factory := &cmdutil.Factory{}
+	cmd := NewCmdCopilot(factory, spy, func(opts *CopilotOptions) error {
+		return nil
+	})
+	cmd.SetArgs([]string{})
+	cmd.SetIn(&bytes.Buffer{})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+
+	_, err := cmd.ExecuteC()
+	require.NoError(t, err)
+	require.Equal(t, ghtelemetry.SAMPLE_ALL, spy.LastSampleRate)
 }

@@ -1,6 +1,7 @@
 package install
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ import (
 	"github.com/cli/cli/v2/internal/skills/installer"
 	"github.com/cli/cli/v2/internal/skills/registry"
 	"github.com/cli/cli/v2/internal/skills/source"
+	"github.com/cli/cli/v2/internal/tableprinter"
 	"github.com/cli/cli/v2/internal/text"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
@@ -47,15 +49,18 @@ type InstallOptions struct {
 	GitClient  *git.Client
 	Remotes    func() (ghContext.Remotes, error)
 
-	SkillSource  string // owner/repo or local path (when --from-local is set)
-	SkillName    string // possibly with @version suffix
-	Agent        string
-	Scope        string
-	ScopeChanged bool // true when --scope was explicitly set
-	Pin          string
-	Dir          string // overrides --agent and --scope
-	Force        bool
-	FromLocal    bool // treat SkillSource as a local directory path
+	SkillSource     string // owner/repo or local path (when --from-local is set)
+	SkillName       string // possibly with @version suffix
+	Agent           string
+	Scope           string
+	ScopeChanged    bool // true when --scope was explicitly set
+	Pin             string
+	Dir             string // overrides --agent and --scope
+	All             bool
+	Force           bool
+	FromLocal       bool // treat SkillSource as a local directory path
+	AllowHiddenDirs bool // include skills in dot-prefixed directories
+	Upstream        bool // install from upstream when re-published skill detected
 
 	repo      ghrepo.Interface // set when SkillSource is a GitHub repository
 	localPath string           // set when FromLocal is true
@@ -80,24 +85,24 @@ func NewCmdInstall(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, ru
 			Install agent skills from a GitHub repository or local directory into
 			your local environment. Skills are placed in a host-specific directory
 			at either project scope (inside the current git repository) or user
-			scope (in your home directory, available everywhere). Supported hosts
-			and their storage directories are (project, user):
+			scope (in your home directory, available everywhere).
 
-			  - GitHub Copilot (%[1]s.agents/skills%[1]s, %[1]s~/.copilot/skills%[1]s)
-			  - Claude Code    (%[1]s.claude/skills%[1]s, %[1]s~/.claude/skills%[1]s)
-			  - Cursor         (%[1]s.agents/skills%[1]s, %[1]s~/.cursor/skills%[1]s)
-			  - Codex          (%[1]s.agents/skills%[1]s, %[1]s~/.codex/skills%[1]s)
-			  - Gemini CLI     (%[1]s.agents/skills%[1]s, %[1]s~/.gemini/skills%[1]s)
-			  - Antigravity    (%[1]s.agents/skills%[1]s, %[1]s~/.gemini/antigravity/skills%[1]s)
+			A wide range of AI coding agents are supported, including GitHub
+			Copilot, Claude Code, Cursor, Codex, Gemini CLI, Antigravity, Amp,
+			Goose, Junie, OpenCode, Windsurf, and many more.
+
+			Supported %[1]s--agent%[1]s values:
+
+			%[2]s
 
 			Use %[1]s--agent%[1]s and %[1]s--scope%[1]s to control placement, or %[1]s--dir%[1]s for a
 			custom directory. The default scope is %[1]sproject%[1]s, and the default
 			agent is %[1]sgithub-copilot%[1]s (when running non-interactively).
 
-			At project scope, GitHub Copilot, Cursor, Codex, Gemini CLI, and
-			Antigravity all use the shared %[1]s.agents/skills%[1]s directory. If you
-			select multiple hosts that resolve to the same destination, each skill is
-			installed there only once.
+			At project scope, several agents (including GitHub Copilot, Cursor,
+			Codex, Gemini CLI, Antigravity, Amp, Cline, OpenCode, and Warp) share
+			the %[1]s.agents/skills%[1]s directory. If you select multiple hosts that
+			resolve to the same destination, each skill is installed there only once.
 
 			The first argument is a GitHub repository in %[1]sOWNER/REPO%[1]s format.
 			Use %[1]s--from-local%[1]s to install from a local directory instead.
@@ -106,12 +111,16 @@ func NewCmdInstall(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, ru
 			tracking metadata injected into frontmatter.
 
 			Skills are discovered automatically using the %[1]sskills/*/SKILL.md%[1]s convention
-			defined by the Agent Skills specification. For more information on the specification, 
+			defined by the Agent Skills specification, including when the %[1]sskills/%[1]s
+			directory is nested under a prefix (e.g. %[1]sterraform/code-generation/skills/...%[1]s).
+			For more information on the specification,
 			see: https://agentskills.io/specification
 
 			The skill argument can be a name, a namespaced name (%[1]sauthor/skill%[1]s),
-			or an exact path within the repository (%[1]sskills/author/skill%[1]s or
-			%[1]sskills/author/skill/SKILL.md%[1]s).
+			or an exact path within the repository (%[1]sskills/author/skill%[1]s,
+			%[1]spackages/agent-skills/code-review%[1]s, or any %[1]s.../SKILL.md%[1]s path).
+			Namespaced names with one slash are matched by name. Use a %[1]sSKILL.md%[1]s
+			suffix to force a one-directory path outside the standard conventions.
 
 			Performance tip: when installing from a large repository with many
 			skills, providing an exact path instead of a skill name avoids a
@@ -131,9 +140,14 @@ func NewCmdInstall(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, ru
 			enables %[1]sgh skill update%[1]s to detect changes.
 
 			When run interactively, the command prompts for any missing arguments.
-			When run non-interactively, %[1]srepository%[1]s and a skill name are
-			required.
-		`, "`"),
+
+			Use %[1]s--all%[1]s to install every discovered skill from the repository
+			without prompting for skill selection. When run non-interactively,
+			%[1]srepository%[1]s is required; without a skill name or %[1]s--all%[1]s the
+			matching skills are listed (as tab-separated values when piped) so you can
+			browse or filter them with tools like %[1]sgrep%[1]s before re-running with
+			a specific skill.
+		`, "`", registry.AgentHelpList()),
 		Example: heredoc.Doc(`
 			# Interactive: choose repo, skill, and agent
 			$ gh skill install
@@ -141,14 +155,23 @@ func NewCmdInstall(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, ru
 			# Choose a skill from the repo interactively
 			$ gh skill install github/awesome-copilot
 
+			# List available skills non-interactively (e.g. to pipe into grep)
+			$ gh skill install github/awesome-copilot | grep review
+
 			# Install a specific skill
 			$ gh skill install github/awesome-copilot git-commit
+
+			# Install all skills from a repository
+			$ gh skill install github/awesome-copilot --all
 
 			# Install a specific version
 			$ gh skill install github/awesome-copilot git-commit@v1.2.0
 
 			# Install from a large namespaced repo by path (efficient, skips full discovery)
 			$ gh skill install github/awesome-copilot skills/monalisa/code-review
+
+			# Install from a non-standard nested path (efficient, skips full discovery)
+			$ gh skill install monalisa/skills-repo packages/agent-skills/code-review
 
 			# Install from a local directory
 			$ gh skill install ./my-skills-repo --from-local
@@ -161,6 +184,9 @@ func NewCmdInstall(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, ru
 
 			# Pin to a specific git ref
 			$ gh skill install github/awesome-copilot git-commit --pin v2.0.0
+
+			# Install skills from hidden directories (e.g. .claude/skills/)
+			$ gh skill install owner/repo --allow-hidden-dirs
 		`),
 		Aliases: []string{"add"},
 		Args:    cobra.MaximumNArgs(2),
@@ -172,6 +198,10 @@ func NewCmdInstall(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, ru
 				opts.SkillName = args[1]
 			}
 			opts.ScopeChanged = cmd.Flags().Changed("scope")
+
+			if opts.All && opts.SkillName != "" {
+				return cmdutil.FlagErrorf("cannot use --all with a skill argument")
+			}
 
 			// Resolve the source type early so installRun can branch directly.
 			if opts.FromLocal {
@@ -187,6 +217,10 @@ func NewCmdInstall(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, ru
 				return err
 			}
 
+			if err := cmdutil.MutuallyExclusive("--from-local and --upstream cannot be used together", opts.FromLocal, opts.Upstream); err != nil {
+				return err
+			}
+
 			if opts.Pin != "" && opts.SkillName != "" && strings.Contains(opts.SkillName, "@") {
 				return cmdutil.FlagErrorf("cannot use --pin with an inline @version in the skill name")
 			}
@@ -198,12 +232,16 @@ func NewCmdInstall(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, ru
 		},
 	}
 
-	cmdutil.StringEnumFlag(cmd, &opts.Agent, "agent", "", "", registry.AgentIDs(), "Target agent")
+	agentFlag := cmdutil.StringEnumFlag(cmd, &opts.Agent, "agent", "", "", registry.AgentIDs(), "Target agent")
+	agentFlag.Usage = "Target agent (see supported values above)"
 	cmdutil.StringEnumFlag(cmd, &opts.Scope, "scope", "", "project", []string{"project", "user"}, "Installation scope")
 	cmd.Flags().StringVar(&opts.Pin, "pin", "", "Pin to a specific git tag or commit SHA")
 	cmd.Flags().StringVar(&opts.Dir, "dir", "", "Install to a custom directory (overrides --agent and --scope)")
+	cmd.Flags().BoolVar(&opts.All, "all", false, "Install all skills without prompting for skill selection")
 	cmd.Flags().BoolVarP(&opts.Force, "force", "f", false, "Overwrite existing skills without prompting")
 	cmd.Flags().BoolVar(&opts.FromLocal, "from-local", false, "Treat the argument as a local directory path instead of a repository")
+	cmd.Flags().BoolVar(&opts.AllowHiddenDirs, "allow-hidden-dirs", false, "Include skills in hidden directories (e.g. .claude/skills/, .agents/skills/)")
+	cmd.Flags().BoolVar(&opts.Upstream, "upstream", false, "Install from the upstream source when a re-published skill is detected")
 	cmdutil.DisableAuthCheckFlag(cmd.Flags().Lookup("from-local"))
 
 	return cmd
@@ -240,13 +278,17 @@ func installRun(opts *InstallOptions) error {
 	// Kick off the visibility fetch in parallel with the install work so
 	// the extra API roundtrip doesn't add latency on the critical path.
 	// The result is consumed when the telemetry event is emitted below.
+	// Capture repo fields now to avoid a data race if opts.repo is
+	// swapped during an upstream redirect.
 	type visResult struct {
 		vis discovery.RepoVisibility
 		err error
 	}
 	visCh := make(chan visResult, 1)
+	visOwner := opts.repo.RepoOwner()
+	visRepo := opts.repo.RepoName()
 	go func() {
-		vis, err := discovery.FetchRepoVisibility(apiClient, hostname, opts.repo.RepoOwner(), opts.repo.RepoName())
+		vis, err := discovery.FetchRepoVisibility(apiClient, hostname, visOwner, visRepo)
 		visCh <- visResult{vis: vis, err: err}
 	}()
 
@@ -257,7 +299,7 @@ func installRun(opts *InstallOptions) error {
 
 	var selectedSkills []discovery.Skill
 
-	if isSkillPath(opts.SkillName) {
+	if discovery.IsSkillPath(opts.SkillName) {
 		opts.IO.StartProgressIndicatorWithLabel("Looking up skill")
 		skill, err := discovery.DiscoverSkillByPath(apiClient, hostname, opts.repo.RepoOwner(), opts.repo.RepoName(), resolved.SHA, opts.SkillName)
 		opts.IO.StopProgressIndicator()
@@ -281,7 +323,47 @@ func installRun(opts *InstallOptions) error {
 			},
 		})
 		if err != nil {
+			if errors.Is(err, errSkillsListed) {
+				return nil
+			}
 			return err
+		}
+	}
+
+	// Track upstream provenance detection result for telemetry.
+	upstreamSource := "none"
+
+	// Check if the selected skill was re-published from an upstream source.
+	// The re-publisher's SKILL.md will have github-repo metadata pointing
+	// to the original source repo. If detected, offer to install directly
+	// from upstream instead.
+	if len(selectedSkills) == 1 && selectedSkills[0].BlobSHA != "" {
+		upstreamRepo, detected, err := checkUpstreamProvenance(opts, apiClient, hostname, selectedSkills[0], resolved.SHA)
+		if err != nil {
+			return err
+		}
+		if upstreamRepo != nil {
+			redirectDims := map[string]string{}
+			select {
+			case r := <-visCh:
+				if r.err == nil && r.vis == discovery.RepoVisibilityPublic {
+					redirectDims["from_owner"] = visOwner
+					redirectDims["from_repo"] = visRepo
+				}
+			case <-time.After(visibilityWaitTimeout):
+			}
+			opts.Telemetry.Record(ghtelemetry.Event{
+				Type:       "skill_upstream_redirect",
+				Dimensions: redirectDims,
+			})
+			opts.repo = upstreamRepo
+			opts.SkillSource = ghrepo.FullName(upstreamRepo)
+			opts.version = ""
+			opts.Pin = ""
+			return installRun(opts)
+		}
+		if detected {
+			upstreamSource = "republisher"
 		}
 	}
 
@@ -335,7 +417,8 @@ func installRun(opts *InstallOptions) error {
 			}
 
 			printFileTree(opts.IO.ErrOut, cs, result.Dir, result.Installed)
-			printReviewHint(opts.IO.ErrOut, cs, repoSource, resolved.SHA, result.Installed)
+			printReviewHint(opts.IO.ErrOut, cs, repoSource, resolved.SHA, result.Installed, opts.AllowHiddenDirs)
+			printHostHints(opts.IO.ErrOut, cs, plan.hosts, result.Installed, result.Dir, gitRoot)
 		}
 
 		if err != nil {
@@ -346,6 +429,7 @@ func installRun(opts *InstallOptions) error {
 	dims := map[string]string{
 		"agent_hosts":     mapAgentHostsToIDs(selectedHosts),
 		"skill_host_type": ghinstance.CategorizeHost(opts.repo.RepoHost()),
+		"upstream_source": upstreamSource,
 	}
 	select {
 	case r := <-visCh:
@@ -415,8 +499,13 @@ func runLocalInstall(opts *InstallOptions) error {
 	}
 
 	opts.IO.StartProgressIndicatorWithLabel("Discovering skills")
-	skills, err := discovery.DiscoverLocalSkills(absSource)
+	allSkills, err := discovery.DiscoverLocalSkillsWithOptions(absSource, discovery.DiscoverOptions{})
 	opts.IO.StopProgressIndicator()
+	if err != nil {
+		return err
+	}
+
+	skills, err := filterHiddenDirSkills(opts, allSkills)
 	if err != nil {
 		return err
 	}
@@ -430,6 +519,9 @@ func runLocalInstall(opts *InstallOptions) error {
 		sourceHint:  absSource,
 	})
 	if err != nil {
+		if errors.Is(err, errSkillsListed) {
+			return nil
+		}
 		return err
 	}
 
@@ -473,25 +565,11 @@ func runLocalInstall(opts *InstallOptions) error {
 		}
 
 		printFileTree(opts.IO.ErrOut, cs, result.Dir, result.Installed)
-		printReviewHint(opts.IO.ErrOut, cs, "", "", result.Installed)
+		printReviewHint(opts.IO.ErrOut, cs, "", "", result.Installed, false)
+		printHostHints(opts.IO.ErrOut, cs, plan.hosts, result.Installed, result.Dir, gitRoot)
 	}
 
 	return nil
-}
-
-// isSkillPath returns true if the argument looks like a repo-relative path
-// rather than a simple skill name.
-func isSkillPath(name string) bool {
-	if name == "" {
-		return false
-	}
-	if name == "SKILL.md" || strings.HasSuffix(name, "/SKILL.md") {
-		return true
-	}
-	if strings.HasPrefix(name, "skills/") || strings.HasPrefix(name, "plugins/") {
-		return true
-	}
-	return false
 }
 
 func resolveRepoArg(skillSource string, canPrompt bool, p prompter.Prompter) (ghrepo.Interface, string, error) {
@@ -550,7 +628,7 @@ func resolveVersion(opts *InstallOptions, client *api.Client, hostname string) (
 
 func discoverSkills(opts *InstallOptions, client *api.Client, hostname string, resolved *discovery.ResolvedRef) ([]discovery.Skill, error) {
 	opts.IO.StartProgressIndicatorWithLabel("Discovering skills")
-	skills, err := discovery.DiscoverSkills(client, hostname, opts.repo.RepoOwner(), opts.repo.RepoName(), resolved.SHA)
+	allSkills, err := discovery.DiscoverSkillsWithOptions(client, hostname, opts.repo.RepoOwner(), opts.repo.RepoName(), resolved.SHA, discovery.DiscoverOptions{})
 	opts.IO.StopProgressIndicator()
 	if err != nil {
 		var treeTooLarge *discovery.TreeTooLargeError
@@ -560,6 +638,10 @@ func discoverSkills(opts *InstallOptions, client *api.Client, hostname string, r
 			return nil, err
 		}
 		return nil, err
+	}
+	skills, filterErr := filterHiddenDirSkills(opts, allSkills)
+	if filterErr != nil {
+		return nil, filterErr
 	}
 	logConventions(opts.IO, skills)
 	for _, s := range skills {
@@ -602,6 +684,12 @@ type installPlan struct {
 	skills []discovery.Skill
 }
 
+// errSkillsListed is a sentinel returned by selectSkillsWithSelector when
+// the command runs non-interactively without a skill name. In that case the
+// selector prints the available skills to stdout (so they can be piped into
+// grep or similar) and the caller exits without installing.
+var errSkillsListed = errors.New("skills listed")
+
 func selectSkillsWithSelector(opts *InstallOptions, skills []discovery.Skill, canPrompt bool, sel skillSelector) ([]discovery.Skill, error) {
 	checkCollisions := func(ss []discovery.Skill) error {
 		if err := collisionError(ss); err != nil {
@@ -611,12 +699,22 @@ func selectSkillsWithSelector(opts *InstallOptions, skills []discovery.Skill, ca
 		return nil
 	}
 
+	if opts.All {
+		if err := checkCollisions(skills); err != nil {
+			return nil, err
+		}
+		return skills, nil
+	}
+
 	if opts.SkillName != "" {
 		return sel.matchByName(opts, skills)
 	}
 
 	if !canPrompt {
-		return nil, cmdutil.FlagErrorf("must specify a skill name when not running interactively")
+		if err := listAvailableSkills(opts, skills, sel); err != nil {
+			return nil, err
+		}
+		return nil, errSkillsListed
 	}
 
 	if sel.fetchDescriptions != nil {
@@ -658,6 +756,43 @@ func selectSkillsWithSelector(opts *InstallOptions, skills []discovery.Skill, ca
 		return nil, err
 	}
 	return result, checkCollisions(result)
+}
+
+// listAvailableSkills prints discovered skills as a table for non-interactive
+// callers, mirroring the information shown in the interactive picker so the
+// output can be browsed or piped into tools like grep.
+func listAvailableSkills(opts *InstallOptions, skills []discovery.Skill, sel skillSelector) error {
+	if len(skills) == 0 {
+		return fmt.Errorf("no skills found in %s", sel.sourceHint)
+	}
+
+	if sel.fetchDescriptions != nil {
+		sel.fetchDescriptions()
+	}
+
+	if opts.IO.IsStdoutTTY() {
+		fmt.Fprintf(opts.IO.ErrOut, "Showing %s from %s. Re-run with a skill name to install.\n\n",
+			text.Pluralize(len(skills), "skill"), sel.sourceHint)
+	}
+
+	tw := opts.IO.TerminalWidth()
+	descWidth := tw - 40
+	if descWidth < 20 {
+		descWidth = 20
+	}
+	isTTY := opts.IO.IsStdoutTTY()
+
+	table := tableprinter.New(opts.IO, tableprinter.WithHeader("SKILL", "DESCRIPTION"))
+	for _, s := range skills {
+		table.AddField(s.DisplayName())
+		desc := s.Description
+		if isTTY {
+			desc = text.Truncate(descWidth, desc)
+		}
+		table.AddField(desc)
+		table.EndRow()
+	}
+	return table.Render()
 }
 
 func matchSkillByName(opts *InstallOptions, skills []discovery.Skill) ([]discovery.Skill, error) {
@@ -780,6 +915,16 @@ func resolveHosts(opts *InstallOptions, canPrompt bool) ([]*registry.AgentHost, 
 		return []*registry.AgentHost{h}, nil
 	}
 
+	// --dir fixes the destination in resolveInstallDir regardless of the agent host,
+	// which then only affects post-install hint output; the default is a safe placeholder.
+	if opts.Dir != "" {
+		h, err := registry.FindByID(registry.DefaultAgentID)
+		if err != nil {
+			return nil, err
+		}
+		return []*registry.AgentHost{h}, nil
+	}
+
 	if !canPrompt {
 		h, err := registry.FindByID(registry.DefaultAgentID)
 		if err != nil {
@@ -789,8 +934,18 @@ func resolveHosts(opts *InstallOptions, canPrompt bool) ([]*registry.AgentHost, 
 	}
 
 	fmt.Fprintln(opts.IO.ErrOut)
-	names := registry.AgentNames()
-	indices, err := opts.Prompter.MultiSelect("Select target agent(s):", []string{names[0]}, names)
+	labels := make([]string, len(registry.Agents))
+	defaultLabel := ""
+	for i, h := range registry.Agents {
+		labels[i] = h.Name
+		if h.ID == registry.DefaultAgentID {
+			defaultLabel = labels[i]
+		}
+	}
+	if defaultLabel == "" {
+		defaultLabel = labels[0]
+	}
+	indices, err := opts.Prompter.MultiSelect("Select target agent(s):", []string{defaultLabel}, labels)
 	if err != nil {
 		return nil, err
 	}
@@ -890,7 +1045,7 @@ func truncateDescription(s string, maxWidth int) string {
 func checkOverwrite(opts *InstallOptions, skills []discovery.Skill, targetDir string, canPrompt bool) ([]discovery.Skill, error) {
 	var existing, fresh []discovery.Skill
 	for _, s := range skills {
-		dir := filepath.Join(targetDir, filepath.FromSlash(s.InstallName()))
+		dir := filepath.Join(targetDir, s.Name)
 		if _, err := os.Stat(dir); err == nil {
 			existing = append(existing, s)
 		} else {
@@ -932,7 +1087,7 @@ func checkOverwrite(opts *InstallOptions, skills []discovery.Skill, targetDir st
 }
 
 func existingSkillPrompt(targetDir string, incoming discovery.Skill) string {
-	skillFile := filepath.Join(targetDir, filepath.FromSlash(incoming.InstallName()), "SKILL.md")
+	skillFile := filepath.Join(targetDir, incoming.Name, "SKILL.md")
 	data, err := os.ReadFile(skillFile)
 	if err != nil {
 		return fmt.Sprintf("Skill %q already exists. Overwrite?", incoming.DisplayName())
@@ -1037,8 +1192,10 @@ func printPreInstallDisclaimer(w io.Writer, cs *iostreams.ColorScheme) {
 
 // printReviewHint warns the user to review installed skills and suggests preview commands.
 // When sha is non-empty the suggested commands include @SHA so the user previews
-// exactly the version that was installed.
-func printReviewHint(w io.Writer, cs *iostreams.ColorScheme, repo, sha string, skillNames []string) {
+// exactly the version that was installed. When allowHiddenDirs is true, the
+// suggested commands include --allow-hidden-dirs so previewing hidden-dir
+// skills works without an extra manual step.
+func printReviewHint(w io.Writer, cs *iostreams.ColorScheme, repo, sha string, skillNames []string, allowHiddenDirs bool) {
 	if len(skillNames) == 0 {
 		return
 	}
@@ -1049,12 +1206,167 @@ func printReviewHint(w io.Writer, cs *iostreams.ColorScheme, repo, sha string, s
 	}
 	fmt.Fprintln(w, "  Review installed content before use:")
 	fmt.Fprintln(w)
+	hiddenFlag := ""
+	if allowHiddenDirs {
+		hiddenFlag = " --allow-hidden-dirs"
+	}
 	for _, name := range skillNames {
 		if sha != "" {
-			fmt.Fprintf(w, "    gh skill preview %s %s@%s\n", repo, name, sha)
+			fmt.Fprintf(w, "    gh skill preview %s %s@%s%s\n", repo, name, sha, hiddenFlag)
 		} else {
-			fmt.Fprintf(w, "    gh skill preview %s %s\n", repo, name)
+			fmt.Fprintf(w, "    gh skill preview %s %s%s\n", repo, name, hiddenFlag)
 		}
 	}
 	fmt.Fprintln(w)
+}
+
+// printHostHints prints any agent-specific post-install guidance for the
+// hosts that were installed to. Most agents need no extra steps; this is
+// currently used for Kiro CLI, which requires skills to be registered as
+// resources on a custom agent. The path in the example is derived from
+// the actual install directory so it matches the chosen scope or --dir.
+func printHostHints(w io.Writer, cs *iostreams.ColorScheme, hosts []*registry.AgentHost, installed []string, installDir, gitRoot string) {
+	if len(installed) == 0 {
+		return
+	}
+	for _, h := range hosts {
+		if h.ID == "kiro-cli" {
+			fmt.Fprintln(w)
+			fmt.Fprint(w, heredoc.Docf(`
+				%s Kiro CLI: register these skills on a custom agent by adding them to
+				  .kiro/agents/<agent>.json under "resources", for example:
+
+				    {
+				      "resources": ["skill://%s/**/SKILL.md"]
+				    }
+			`, cs.WarningIcon(), kiroResourcePath(installDir, gitRoot)))
+			fmt.Fprintln(w)
+			return
+		}
+	}
+}
+
+// kiroResourcePath returns a slash-separated path suitable for use in the
+// "resources" field of a Kiro agent config. When the install directory is
+// inside the current git repository the path is made relative to the repo
+// root so the example works for project-scoped agent configs; otherwise
+// the absolute install path is used (e.g. for --scope user or --dir).
+func kiroResourcePath(installDir, gitRoot string) string {
+	if gitRoot != "" && installDir != "" {
+		if rel, err := filepath.Rel(gitRoot, installDir); err == nil && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel) {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return filepath.ToSlash(installDir)
+}
+
+// filterHiddenDirSkills applies the --allow-hidden-dirs flag logic. When the
+// flag is set, all skills are returned with a warning. Otherwise, hidden-dir
+// skills are excluded with an error if no standard skills remain.
+func filterHiddenDirSkills(opts *InstallOptions, allSkills []discovery.Skill) ([]discovery.Skill, error) {
+	cs := opts.IO.ColorScheme()
+
+	if opts.AllowHiddenDirs {
+		if discovery.HasHiddenDirSkills(allSkills) {
+			fmt.Fprint(opts.IO.ErrOut, heredoc.Docf(`
+				%[1]s Skills in hidden directories (e.g. .claude/, .agents/) may be installed
+				  copies from another publisher. Verify the skill's origin and check for a
+				  canonical source.
+			`, cs.WarningIcon()))
+		}
+		return allSkills, nil
+	}
+
+	r := discovery.PartitionHiddenDirSkills(allSkills)
+	if len(r.Standard) == 0 && r.HiddenCount > 0 {
+		return nil, fmt.Errorf(
+			"no standard skills found, but %d skill(s) exist in hidden directories\n"+
+				"  Use --allow-hidden-dirs to include them",
+			r.HiddenCount,
+		)
+	}
+
+	return r.Standard, nil
+}
+
+// checkUpstreamProvenance fetches the skill's SKILL.md via the contents API
+// to check if it contains github-repo metadata pointing to a different
+// repository, indicating the skill was re-published from an upstream source.
+// In interactive mode, the user is asked whether to install from the
+// re-publisher or redirect to the upstream. Non-interactive mode always
+// installs from the re-publisher.
+// Returns (repo to redirect to, whether upstream was detected, error).
+func checkUpstreamProvenance(opts *InstallOptions, client *api.Client, hostname string, skill discovery.Skill, commitSHA string) (ghrepo.Interface, bool, error) {
+	apiPath := fmt.Sprintf("repos/%s/%s/contents/%s?ref=%s",
+		opts.repo.RepoOwner(), opts.repo.RepoName(),
+		skill.Path+"/SKILL.md", commitSHA)
+	var fileResp struct {
+		Content  string `json:"content"`
+		Encoding string `json:"encoding"`
+	}
+	if err := client.REST(hostname, "GET", apiPath, nil, &fileResp); err != nil {
+		return nil, false, nil //nolint:nilerr // best-effort check; failing to fetch is not fatal
+	}
+	if fileResp.Encoding != "base64" {
+		return nil, false, nil
+	}
+	decoded, decodeErr := io.ReadAll(base64.NewDecoder(base64.StdEncoding, strings.NewReader(fileResp.Content)))
+	if decodeErr != nil {
+		return nil, false, nil //nolint:nilerr // best-effort; decode failure is not fatal
+	}
+	content := string(decoded)
+
+	result, parseErr := frontmatter.Parse(content)
+	if parseErr != nil || result.Metadata.Meta == nil {
+		//nolint:nilerr // unparseable frontmatter means no upstream to detect
+		return nil, false, nil
+	}
+
+	existingRepo, _ := result.Metadata.Meta["github-repo"].(string)
+	if existingRepo == "" {
+		return nil, false, nil
+	}
+
+	currentRepoURL := source.BuildRepoURL(hostname, opts.repo.RepoOwner(), opts.repo.RepoName())
+	if existingRepo == currentRepoURL {
+		return nil, false, nil
+	}
+
+	upstreamRepo, parseErr := source.ParseRepoURL(existingRepo)
+	if parseErr != nil {
+		//nolint:nilerr // invalid repo URL means we can't redirect; install normally
+		return nil, false, nil
+	}
+
+	cs := opts.IO.ColorScheme()
+	upstreamLabel := ghrepo.FullName(upstreamRepo)
+	repoSource := ghrepo.FullName(opts.repo)
+
+	fmt.Fprintf(opts.IO.ErrOut, "%s This skill was originally published in %s\n", cs.WarningIcon(), upstreamLabel)
+
+	if opts.Upstream {
+		fmt.Fprintf(opts.IO.ErrOut, "Redirecting install to %s...\n", upstreamLabel)
+		return upstreamRepo, true, nil
+	}
+
+	if !opts.IO.CanPrompt() {
+		fmt.Fprintf(opts.IO.ErrOut, "  Installing from %s (use --upstream or interactive mode to choose upstream)\n", repoSource)
+		return nil, true, nil
+	}
+
+	choices := []string{
+		fmt.Sprintf("%s (re-publisher, recommended)", repoSource),
+		fmt.Sprintf("%s (upstream)", upstreamLabel),
+	}
+	idx, err := opts.Prompter.Select("Install from:", "", choices)
+	if err != nil {
+		return nil, true, err
+	}
+
+	if idx == 1 {
+		fmt.Fprintf(opts.IO.ErrOut, "Redirecting install to %s...\n", upstreamLabel)
+		return upstreamRepo, true, nil
+	}
+
+	return nil, true, nil
 }

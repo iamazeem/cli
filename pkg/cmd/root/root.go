@@ -21,6 +21,7 @@ import (
 	completionCmd "github.com/cli/cli/v2/pkg/cmd/completion"
 	configCmd "github.com/cli/cli/v2/pkg/cmd/config"
 	copilotCmd "github.com/cli/cli/v2/pkg/cmd/copilot"
+	discussionCmd "github.com/cli/cli/v2/pkg/cmd/discussion"
 	extensionCmd "github.com/cli/cli/v2/pkg/cmd/extension"
 	"github.com/cli/cli/v2/pkg/cmd/factory"
 	gistCmd "github.com/cli/cli/v2/pkg/cmd/gist"
@@ -152,7 +153,7 @@ func NewCmdRoot(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, versi
 	cmd.AddCommand(skillsCmd.NewCmdSkills(f, telemetry))
 
 	// Root commands with standalone functionality and no subcommands
-	cmd.AddCommand(copilotCmd.NewCmdCopilot(f, nil))
+	cmd.AddCommand(copilotCmd.NewCmdCopilot(f, telemetry, nil))
 	cmd.AddCommand(statusCmd.NewCmdStatus(f, nil))
 	cmd.AddCommand(creditsCmd.NewCmdCredits(f, nil))
 	cmd.AddCommand(licensesCmd.NewCmdLicenses(f))
@@ -164,6 +165,7 @@ func NewCmdRoot(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, versi
 
 	cmd.AddCommand(agentTaskCmd.NewCmdAgentTask(&repoResolvingCmdFactory))
 	cmd.AddCommand(browseCmd.NewCmdBrowse(&repoResolvingCmdFactory, nil))
+	cmd.AddCommand(discussionCmd.NewCmdDiscussion(&repoResolvingCmdFactory))
 	cmd.AddCommand(prCmd.NewCmdPR(&repoResolvingCmdFactory))
 	cmd.AddCommand(orgCmd.NewCmdOrg(&repoResolvingCmdFactory))
 	cmd.AddCommand(issueCmd.NewCmdIssue(&repoResolvingCmdFactory))

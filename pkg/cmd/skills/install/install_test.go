@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/cli/cli/v2/internal/ghrepo"
 	"github.com/cli/cli/v2/internal/prompter"
 	"github.com/cli/cli/v2/internal/skills/discovery"
+	"github.com/cli/cli/v2/internal/skills/registry"
 	"github.com/cli/cli/v2/internal/telemetry"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/httpmock"
@@ -42,6 +44,11 @@ func TestNewCmdInstall(t *testing.T) {
 			name:     "repo and skill",
 			cli:      "monalisa/skills-repo git-commit",
 			wantOpts: InstallOptions{SkillSource: "monalisa/skills-repo", SkillName: "git-commit", Scope: "project"},
+		},
+		{
+			name:     "repo and all flag",
+			cli:      "monalisa/skills-repo --all",
+			wantOpts: InstallOptions{SkillSource: "monalisa/skills-repo", All: true, Scope: "project"},
 		},
 		{
 			name: "all flags",
@@ -73,6 +80,11 @@ func TestNewCmdInstall(t *testing.T) {
 		{
 			name:    "pin conflicts with inline version",
 			cli:     "monalisa/skills-repo git-commit@v1.0.0 --pin v2.0.0",
+			wantErr: true,
+		},
+		{
+			name:    "all conflicts with skill name",
+			cli:     "monalisa/skills-repo git-commit --all",
 			wantErr: true,
 		},
 		{
@@ -118,6 +130,21 @@ func TestNewCmdInstall(t *testing.T) {
 			cli:     "--from-local ./local-dir --pin v1.0.0",
 			wantErr: true,
 		},
+		{
+			name:     "allow-hidden-dirs flag",
+			cli:      "monalisa/skills-repo --allow-hidden-dirs",
+			wantOpts: InstallOptions{SkillSource: "monalisa/skills-repo", Scope: "project", AllowHiddenDirs: true},
+		},
+		{
+			name:     "upstream flag",
+			cli:      "monalisa/skills-repo git-commit --upstream",
+			wantOpts: InstallOptions{SkillSource: "monalisa/skills-repo", SkillName: "git-commit", Scope: "project", Upstream: true},
+		},
+		{
+			name:    "from-local with --upstream is mutually exclusive",
+			cli:     "--from-local ./local-dir --upstream",
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -154,8 +181,10 @@ func TestNewCmdInstall(t *testing.T) {
 			assert.Equal(t, tt.wantOpts.Scope, gotOpts.Scope)
 			assert.Equal(t, tt.wantOpts.Pin, gotOpts.Pin)
 			assert.Equal(t, tt.wantOpts.Dir, gotOpts.Dir)
+			assert.Equal(t, tt.wantOpts.All, gotOpts.All)
 			assert.Equal(t, tt.wantOpts.Force, gotOpts.Force)
 			assert.Equal(t, tt.wantOpts.FromLocal, gotOpts.FromLocal)
+			assert.Equal(t, tt.wantOpts.AllowHiddenDirs, gotOpts.AllowHiddenDirs)
 			if tt.wantLocalPath {
 				assert.NotEmpty(t, gotOpts.localPath, "expected localPath to be set")
 			} else {
@@ -176,7 +205,7 @@ func TestNewCmdInstall(t *testing.T) {
 		assert.NotEmpty(t, cmd.Example)
 		assert.Contains(t, cmd.Aliases, "add")
 
-		for _, flag := range []string{"agent", "scope", "pin", "dir", "force"} {
+		for _, flag := range []string{"agent", "scope", "pin", "dir", "all", "force"} {
 			assert.NotNil(t, cmd.Flags().Lookup(flag), "missing flag: --%s", flag)
 		}
 	})
@@ -224,7 +253,7 @@ func stubSkillByPath(reg *httpmock.Registry, owner, repo, sha, skillPath, skillN
 		parentPath = skillPath[:idx]
 	}
 	reg.Register(
-		httpmock.REST("GET", fmt.Sprintf("repos/%s/%s/contents/%s", owner, repo, parentPath)),
+		httpmock.REST("GET", fmt.Sprintf("repos/%s/%s/contents/%s", owner, repo, url.PathEscape(parentPath))),
 		httpmock.StringResponse(fmt.Sprintf(`[{"name": %q, "path": %q, "sha": %q, "type": "dir"}]`, skillName, skillPath, treeSHA)),
 	)
 }
@@ -247,10 +276,26 @@ var gitCommitContent = heredoc.Doc(`
 	# Git Commit
 `)
 
+var codeReviewContent = heredoc.Doc(`
+	---
+	name: code-review
+	description: Reviews code
+	---
+	# Code Review
+`)
+
 // singleSkillTreeJSON returns tree entries for a single skill with the given name.
 func singleSkillTreeJSON(name, treeSHA, blobSHA string) string {
 	return fmt.Sprintf(
 		`{"path": "skills/%s", "type": "tree", "sha": %q}, {"path": "skills/%s/SKILL.md", "type": "blob", "sha": %q}`,
+		name, treeSHA, name, blobSHA,
+	)
+}
+
+// hiddenDirSkillTreeJSON returns tree entries for a hidden-dir skill under .claude/skills/.
+func hiddenDirSkillTreeJSON(name, treeSHA, blobSHA string) string {
+	return fmt.Sprintf(
+		`{"path": ".claude/skills/%s", "type": "tree", "sha": %q}, {"path": ".claude/skills/%s/SKILL.md", "type": "blob", "sha": %q}`,
 		name, treeSHA, name, blobSHA,
 	)
 }
@@ -266,6 +311,7 @@ func TestInstallRun(t *testing.T) {
 		wantErr    string
 		wantStdout string
 		wantStderr string
+		assert     func(t *testing.T)
 	}{
 		{
 			name:  "non-interactive without repo errors",
@@ -280,12 +326,17 @@ func TestInstallRun(t *testing.T) {
 			wantErr: "must specify a repository to install from",
 		},
 		{
-			name:  "non-interactive without skill name errors",
+			name:  "non-interactive without skill name lists available skills",
 			isTTY: false,
 			stubs: func(reg *httpmock.Registry) {
 				stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
 				stubDiscoverTree(reg, "monalisa", "skills-repo", "abc123",
 					singleSkillTreeJSON("git-commit", "treeSHA", "blobSHA"))
+				encoded := base64.StdEncoding.EncodeToString([]byte(gitCommitContent))
+				reg.Register(
+					httpmock.REST("GET", "repos/monalisa/skills-repo/git/blobs/blobSHA"),
+					httpmock.StringResponse(fmt.Sprintf(`{"sha": "blobSHA", "content": %q, "encoding": "base64"}`, encoded)),
+				)
 			},
 			opts: func(ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions {
 				t.Helper()
@@ -299,7 +350,7 @@ func TestInstallRun(t *testing.T) {
 					ScopeChanged: true,
 				}
 			},
-			wantErr: "must specify a skill name when not running interactively",
+			wantStdout: "git-commit\tWrites commits\n",
 		},
 		{
 			name:  "remote install writes files with tracking metadata",
@@ -417,6 +468,30 @@ func TestInstallRun(t *testing.T) {
 					SkillSource: "monalisa/skills-repo",
 					SkillName:   "git-commit",
 					Agent:       "github-copilot",
+					Dir:         t.TempDir(),
+				}
+			},
+			wantStdout: "Installed git-commit",
+		},
+		{
+			name:  "remote install with --dir bypasses agent selection",
+			isTTY: true,
+			stubs: func(reg *httpmock.Registry) {
+				stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
+				stubDiscoverTree(reg, "monalisa", "skills-repo", "abc123",
+					singleSkillTreeJSON("git-commit", "treeSHA", "blobSHA"))
+				stubInstallFiles(reg, "monalisa", "skills-repo", "treeSHA", "blobSHA", gitCommitContent)
+			},
+			opts: func(ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions {
+				t.Helper()
+				return &InstallOptions{
+					IO:          ios,
+					HttpClient:  func() (*http.Client, error) { return &http.Client{Transport: reg}, nil },
+					GitClient:   &git.Client{RepoDir: t.TempDir()},
+					Prompter:    &prompter.PrompterMock{},
+					SkillSource: "monalisa/skills-repo",
+					SkillName:   "git-commit",
+					Scope:       "project",
 					Dir:         t.TempDir(),
 				}
 			},
@@ -745,6 +820,62 @@ func TestInstallRun(t *testing.T) {
 			wantStdout: "Installed git-commit",
 		},
 		{
+			name:  "remote install by nested skill path skips full discovery",
+			isTTY: true,
+			stubs: func(reg *httpmock.Registry) {
+				stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
+				stubSkillByPath(reg, "monalisa", "skills-repo", "abc123",
+					"terraform/code-generation/skills/terraform-style-guide", "terraform-style-guide", "treeSHA")
+				// DiscoverSkillByPath: tree + blob (for fetchDescription)
+				stubInstallFiles(reg, "monalisa", "skills-repo", "treeSHA", "blobSHA", gitCommitContent)
+				// installer.Install: tree + blob (again, for writing files)
+				stubInstallFiles(reg, "monalisa", "skills-repo", "treeSHA", "blobSHA", gitCommitContent)
+			},
+			opts: func(ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions {
+				t.Helper()
+				return &InstallOptions{
+					IO:           ios,
+					HttpClient:   func() (*http.Client, error) { return &http.Client{Transport: reg}, nil },
+					GitClient:    &git.Client{RepoDir: t.TempDir()},
+					SkillSource:  "monalisa/skills-repo",
+					SkillName:    "terraform/code-generation/skills/terraform-style-guide",
+					Agent:        "github-copilot",
+					Scope:        "project",
+					ScopeChanged: true,
+					Dir:          t.TempDir(),
+				}
+			},
+			wantStdout: "Installed terraform-style-guide",
+		},
+		{
+			name:  "remote install by arbitrary nested skill path skips full discovery",
+			isTTY: true,
+			stubs: func(reg *httpmock.Registry) {
+				stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
+				stubSkillByPath(reg, "monalisa", "skills-repo", "abc123",
+					"packages/agent-skills/code-review", "code-review", "treeSHA")
+				// DiscoverSkillByPath: tree + blob (for fetchDescription)
+				stubInstallFiles(reg, "monalisa", "skills-repo", "treeSHA", "blobSHA", gitCommitContent)
+				// installer.Install: tree + blob (again, for writing files)
+				stubInstallFiles(reg, "monalisa", "skills-repo", "treeSHA", "blobSHA", gitCommitContent)
+			},
+			opts: func(ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions {
+				t.Helper()
+				return &InstallOptions{
+					IO:           ios,
+					HttpClient:   func() (*http.Client, error) { return &http.Client{Transport: reg}, nil },
+					GitClient:    &git.Client{RepoDir: t.TempDir()},
+					SkillSource:  "monalisa/skills-repo",
+					SkillName:    "packages/agent-skills/code-review",
+					Agent:        "github-copilot",
+					Scope:        "project",
+					ScopeChanged: true,
+					Dir:          t.TempDir(),
+				}
+			},
+			wantStdout: "Installed code-review",
+		},
+		{
 			name:  "remote install with URL repo argument",
 			isTTY: true,
 			stubs: func(reg *httpmock.Registry) {
@@ -803,7 +934,7 @@ func TestInstallRun(t *testing.T) {
 			wantErr: "conflicting names",
 		},
 		{
-			name:  "remote install all with namespaced skills avoids collisions",
+			name:  "remote install all with namespaced skills detects collisions",
 			isTTY: true,
 			stubs: func(reg *httpmock.Registry) {
 				stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
@@ -814,7 +945,7 @@ func TestInstallRun(t *testing.T) {
 					`{"path": "skills/bob/xlsx-pro", "type": "tree", "sha": "treeB"}, ` +
 					`{"path": "skills/bob/xlsx-pro/SKILL.md", "type": "blob", "sha": "blobB"}`
 				stubDiscoverTree(reg, "monalisa", "skills-repo", "abc123", treeJSON)
-				// Extra blob stubs consumed by FetchDescriptionsConcurrent during interactive selection.
+				// Blob stubs consumed by FetchDescriptionsConcurrent during interactive selection.
 				contentA := base64.StdEncoding.EncodeToString([]byte("---\nname: xlsx-pro\ndescription: Alice\n---\n# A\n"))
 				contentB := base64.StdEncoding.EncodeToString([]byte("---\nname: xlsx-pro\ndescription: Bob\n---\n# B\n"))
 				reg.Register(
@@ -823,10 +954,6 @@ func TestInstallRun(t *testing.T) {
 				reg.Register(
 					httpmock.REST("GET", "repos/monalisa/skills-repo/git/blobs/blobB"),
 					httpmock.StringResponse(fmt.Sprintf(`{"sha": "blobB", "content": %q, "encoding": "base64"}`, contentB)))
-				stubInstallFiles(reg, "monalisa", "skills-repo", "treeA", "blobA",
-					"---\nname: xlsx-pro\ndescription: Alice\n---\n# A\n")
-				stubInstallFiles(reg, "monalisa", "skills-repo", "treeB", "blobB",
-					"---\nname: xlsx-pro\ndescription: Bob\n---\n# B\n")
 			},
 			opts: func(ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions {
 				t.Helper()
@@ -847,7 +974,7 @@ func TestInstallRun(t *testing.T) {
 					Dir:          t.TempDir(),
 				}
 			},
-			wantStdout: "Installed",
+			wantErr: "conflicting names",
 		},
 		{
 			name:  "remote install friendlyDir shows tilde for home paths",
@@ -1123,7 +1250,7 @@ func TestInstallRun(t *testing.T) {
 					SkillName:   "git-commit",
 				}
 			},
-			wantErr: "supports only github.com",
+			wantErr: "does not currently support GitHub Enterprise Server",
 		},
 		{
 			name:  "select all skills in interactive prompt",
@@ -1326,6 +1453,141 @@ func TestInstallRun(t *testing.T) {
 			wantStdout: "Installed git-commit",
 			wantStderr: "Installing to",
 		},
+		{
+			name:  "hidden-dir skills excluded without --allow-hidden-dirs",
+			isTTY: false,
+			stubs: func(reg *httpmock.Registry) {
+				stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
+				stubDiscoverTree(reg, "monalisa", "skills-repo", "abc123",
+					hiddenDirSkillTreeJSON("git-commit", "treeSHA", "blobSHA"))
+			},
+			opts: func(ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions {
+				t.Helper()
+				return &InstallOptions{
+					IO:           ios,
+					HttpClient:   func() (*http.Client, error) { return &http.Client{Transport: reg}, nil },
+					GitClient:    &git.Client{RepoDir: t.TempDir()},
+					SkillSource:  "monalisa/skills-repo",
+					SkillName:    "git-commit",
+					Agent:        "github-copilot",
+					Scope:        "project",
+					ScopeChanged: true,
+				}
+			},
+			wantErr: "no standard skills found, but 1 skill(s) exist in hidden directories",
+		},
+		{
+			name:  "hidden-dir skills included with --allow-hidden-dirs",
+			isTTY: true,
+			stubs: func(reg *httpmock.Registry) {
+				stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
+				stubDiscoverTree(reg, "monalisa", "skills-repo", "abc123",
+					hiddenDirSkillTreeJSON("git-commit", "treeSHA", "blobSHA"))
+				stubInstallFiles(reg, "monalisa", "skills-repo", "treeSHA", "blobSHA", gitCommitContent)
+			},
+			opts: func(ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions {
+				t.Helper()
+				return &InstallOptions{
+					IO:              ios,
+					HttpClient:      func() (*http.Client, error) { return &http.Client{Transport: reg}, nil },
+					GitClient:       &git.Client{RepoDir: t.TempDir()},
+					SkillSource:     "monalisa/skills-repo",
+					SkillName:       "git-commit",
+					Agent:           "github-copilot",
+					Scope:           "project",
+					ScopeChanged:    true,
+					Dir:             t.TempDir(),
+					AllowHiddenDirs: true,
+				}
+			},
+			wantStdout: "Installed git-commit",
+			wantStderr: "Skills in hidden directories",
+		},
+		{
+			name:  "mixed tree without --allow-hidden-dirs returns only standard",
+			isTTY: true,
+			stubs: func(reg *httpmock.Registry) {
+				stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
+				stubDiscoverTree(reg, "monalisa", "skills-repo", "abc123",
+					singleSkillTreeJSON("git-commit", "treeSHA", "blobSHA")+", "+
+						hiddenDirSkillTreeJSON("hidden-skill", "treeSHA2", "blobSHA2"))
+				stubInstallFiles(reg, "monalisa", "skills-repo", "treeSHA", "blobSHA", gitCommitContent)
+			},
+			opts: func(ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions {
+				t.Helper()
+				return &InstallOptions{
+					IO:           ios,
+					HttpClient:   func() (*http.Client, error) { return &http.Client{Transport: reg}, nil },
+					GitClient:    &git.Client{RepoDir: t.TempDir()},
+					SkillSource:  "monalisa/skills-repo",
+					SkillName:    "git-commit",
+					Agent:        "github-copilot",
+					Scope:        "project",
+					ScopeChanged: true,
+					Dir:          t.TempDir(),
+				}
+			},
+			wantStdout: "Installed git-commit",
+		},
+		{
+			name:  "mixed tree with --allow-hidden-dirs returns all",
+			isTTY: false,
+			stubs: func(reg *httpmock.Registry) {
+				stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
+				stubDiscoverTree(reg, "monalisa", "skills-repo", "abc123",
+					singleSkillTreeJSON("git-commit", "treeSHA", "blobSHA")+", "+
+						hiddenDirSkillTreeJSON("hidden-skill", "treeSHA2", "blobSHA2"))
+				stubInstallFiles(reg, "monalisa", "skills-repo", "treeSHA2", "blobSHA2", gitCommitContent)
+			},
+			opts: func(ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions {
+				t.Helper()
+				return &InstallOptions{
+					IO:              ios,
+					HttpClient:      func() (*http.Client, error) { return &http.Client{Transport: reg}, nil },
+					GitClient:       &git.Client{RepoDir: t.TempDir()},
+					SkillSource:     "monalisa/skills-repo",
+					SkillName:       "hidden-skill",
+					Agent:           "github-copilot",
+					Scope:           "project",
+					ScopeChanged:    true,
+					Dir:             t.TempDir(),
+					AllowHiddenDirs: true,
+				}
+			},
+			wantStdout: "Installed hidden-skill",
+			wantStderr: "Skills in hidden directories",
+		},
+		{
+			name: "respect claude code config dir env var for user scope",
+			setup: func(t *testing.T) {
+				t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+			},
+			stubs: func(reg *httpmock.Registry) {
+				stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
+				stubDiscoverTree(reg, "monalisa", "skills-repo", "abc123",
+					singleSkillTreeJSON("git-commit", "treeSHA", "blobSHA"))
+				stubInstallFiles(reg, "monalisa", "skills-repo", "treeSHA", "blobSHA", gitCommitContent)
+			},
+			opts: func(ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions {
+				t.Helper()
+				return &InstallOptions{
+					IO:           ios,
+					HttpClient:   func() (*http.Client, error) { return &http.Client{Transport: reg}, nil },
+					GitClient:    &git.Client{RepoDir: t.TempDir()},
+					SkillSource:  "monalisa/skills-repo",
+					SkillName:    "git-commit",
+					Agent:        "claude-code",
+					Scope:        "user",
+					ScopeChanged: true,
+					Telemetry:    &telemetry.NoOpService{},
+				}
+			},
+			assert: func(t *testing.T) {
+				assert.FileExists(t, filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "skills", "git-commit", "SKILL.md"))
+				assert.NoFileExists(t, filepath.Join(os.Getenv("HOME"), ".claude", "skills", "git-commit", "SKILL.md"))
+			},
+			wantStdout: "Installed git-commit",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1371,8 +1633,50 @@ func TestInstallRun(t *testing.T) {
 			if tt.verify != nil {
 				tt.verify(t)
 			}
+			if tt.assert != nil {
+				tt.assert(t)
+			}
 		})
 	}
+}
+
+func TestInstallRun_AllInstallsRemoteSkills(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
+
+	reg := &httpmock.Registry{}
+	defer reg.Verify(t)
+
+	stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
+	stubDiscoverTree(reg, "monalisa", "skills-repo", "abc123",
+		singleSkillTreeJSON("code-review", "tree-cr", "blob-cr")+", "+
+			singleSkillTreeJSON("git-commit", "tree-gc", "blob-gc"))
+	stubInstallFiles(reg, "monalisa", "skills-repo", "tree-cr", "blob-cr", codeReviewContent)
+	stubInstallFiles(reg, "monalisa", "skills-repo", "tree-gc", "blob-gc", gitCommitContent)
+
+	ios, _, stdout, stderr := iostreams.Test()
+	targetDir := t.TempDir()
+
+	err := installRun(&InstallOptions{
+		IO:           ios,
+		HttpClient:   func() (*http.Client, error) { return &http.Client{Transport: reg}, nil },
+		GitClient:    &git.Client{RepoDir: t.TempDir()},
+		SkillSource:  "monalisa/skills-repo",
+		All:          true,
+		Force:        true,
+		Agent:        "github-copilot",
+		Scope:        "project",
+		ScopeChanged: true,
+		Dir:          targetDir,
+		Telemetry:    &telemetry.NoOpService{},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "Installed code-review")
+	assert.Contains(t, stdout.String(), "Installed git-commit")
+	assert.NotContains(t, stderr.String(), "must specify a skill name")
+	require.FileExists(t, filepath.Join(targetDir, "code-review", "SKILL.md"))
+	require.FileExists(t, filepath.Join(targetDir, "git-commit", "SKILL.md"))
 }
 
 func TestInstallProgress(t *testing.T) {
@@ -1403,7 +1707,15 @@ func TestInstallRun_DeduplicatesSharedProjectDirAcrossHosts(t *testing.T) {
 
 	pm := &prompter.PrompterMock{
 		MultiSelectFunc: func(prompt string, defaults []string, options []string) ([]int, error) {
-			return []int{0, 2}, nil // GitHub Copilot + Cursor share .agents/skills
+			// Select two agents that share the .agents/skills project dir
+			// (GitHub Copilot and Cursor) to exercise deduplication.
+			var indices []int
+			for i, label := range options {
+				if label == "GitHub Copilot" || label == "Cursor" {
+					indices = append(indices, i)
+				}
+			}
+			return indices, nil
 		},
 		SelectFunc: func(prompt, defaultValue string, options []string) (int, error) {
 			return 0, nil // project scope
@@ -1504,7 +1816,7 @@ func TestRunLocalInstall(t *testing.T) {
 			wantStdout: "Installed direct-skill",
 		},
 		{
-			name:  "namespaced skills install to separate directories",
+			name:  "namespaced skills with same name collide in flat install",
 			isTTY: true,
 			setup: func(t *testing.T, sourceDir, _ string) {
 				t.Helper()
@@ -1533,38 +1845,25 @@ func TestRunLocalInstall(t *testing.T) {
 					GitClient:    &git.Client{RepoDir: t.TempDir()},
 				}
 			},
-			verify: func(t *testing.T, targetDir string) {
-				t.Helper()
-				_, err := os.Stat(filepath.Join(targetDir, "alice", "xlsx-pro", "SKILL.md"))
-				assert.NoError(t, err, "alice/xlsx-pro should be installed")
-				_, err = os.Stat(filepath.Join(targetDir, "bob", "xlsx-pro", "SKILL.md"))
-				assert.NoError(t, err, "bob/xlsx-pro should be installed")
-			},
-			wantStdout: "Installed alice/xlsx-pro",
+			wantErr: "conflicting names",
 		},
 		{
-			name:  "local install with --force overwrites namespaced skill",
+			name:  "local install with --force overwrites namespaced skill flat",
 			isTTY: true,
 			setup: func(t *testing.T, sourceDir, targetDir string) {
 				t.Helper()
-				for _, ns := range []string{"alice", "bob"} {
-					writeLocalTestSkill(t, sourceDir, filepath.Join("skills", ns, "xlsx-pro"),
-						fmt.Sprintf("---\nname: xlsx-pro\ndescription: %s xlsx-pro\n---\n# Test\n", ns))
-				}
-				require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "alice", "xlsx-pro"), 0o755))
+				writeLocalTestSkill(t, sourceDir, filepath.Join("skills", "alice", "xlsx-pro"),
+					"---\nname: xlsx-pro\ndescription: alice xlsx-pro\n---\n# Test\n")
+				require.NoError(t, os.MkdirAll(filepath.Join(targetDir, "xlsx-pro"), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(targetDir, "xlsx-pro", "SKILL.md"), []byte("old"), 0o644))
 			},
 			opts: func(ios *iostreams.IOStreams, sourceDir, targetDir string) *InstallOptions {
 				t.Helper()
-				pm := &prompter.PrompterMock{
-					MultiSelectWithSearchFunc: func(_, _ string, _, _ []string, _ func(string) prompter.MultiSelectSearchResult) ([]string, error) {
-						return []string{allSkillsKey}, nil
-					},
-				}
 				return &InstallOptions{
 					IO:           ios,
 					SkillSource:  sourceDir,
 					localPath:    sourceDir,
-					Prompter:     pm,
+					SkillName:    "xlsx-pro",
 					Force:        true,
 					Agent:        "github-copilot",
 					Scope:        "project",
@@ -1572,6 +1871,12 @@ func TestRunLocalInstall(t *testing.T) {
 					Dir:          targetDir,
 					GitClient:    &git.Client{RepoDir: t.TempDir()},
 				}
+			},
+			verify: func(t *testing.T, targetDir string) {
+				t.Helper()
+				content, err := os.ReadFile(filepath.Join(targetDir, "xlsx-pro", "SKILL.md"))
+				require.NoError(t, err)
+				assert.Contains(t, string(content), "alice xlsx-pro")
 			},
 			wantStdout: "Installed",
 		},
@@ -1723,6 +2028,40 @@ func TestRunLocalInstall(t *testing.T) {
 			wantStdout: "Installed git-commit",
 		},
 		{
+			name:  "local install without skill name lists available skills",
+			isTTY: false,
+			setup: func(t *testing.T, sourceDir, _ string) {
+				t.Helper()
+				writeLocalTestSkill(t, sourceDir, filepath.Join("skills", "git-commit"), heredoc.Doc(`
+					---
+					name: git-commit
+					description: A local skill
+					---
+					# Git Commit
+				`))
+				writeLocalTestSkill(t, sourceDir, filepath.Join("skills", "code-review"), heredoc.Doc(`
+					---
+					name: code-review
+					description: Reviews code
+					---
+					# Code Review
+				`))
+			},
+			opts: func(ios *iostreams.IOStreams, sourceDir, _ string) *InstallOptions {
+				t.Helper()
+				return &InstallOptions{
+					IO:           ios,
+					SkillSource:  sourceDir,
+					localPath:    sourceDir,
+					Agent:        "github-copilot",
+					Scope:        "project",
+					ScopeChanged: true,
+					GitClient:    &git.Client{RepoDir: t.TempDir()},
+				}
+			},
+			wantStdout: "code-review\tReviews code\ngit-commit\tA local skill\n",
+		},
+		{
 			name:  "local install outputs file tree for TTY",
 			isTTY: true,
 			setup: func(t *testing.T, sourceDir, _ string) {
@@ -1844,6 +2183,67 @@ func TestRunLocalInstall(t *testing.T) {
 			},
 			wantErr: "not found in local directory",
 		},
+		{
+			name:  "local hidden-dir skills excluded without --allow-hidden-dirs",
+			isTTY: false,
+			setup: func(t *testing.T, sourceDir, _ string) {
+				t.Helper()
+				writeLocalTestSkill(t, sourceDir, filepath.Join(".claude", "skills", "code-review"), heredoc.Doc(`
+					---
+					name: code-review
+					description: Reviews code
+					---
+					# Code Review
+				`))
+			},
+			opts: func(ios *iostreams.IOStreams, sourceDir, targetDir string) *InstallOptions {
+				t.Helper()
+				return &InstallOptions{
+					IO:           ios,
+					SkillSource:  sourceDir,
+					localPath:    sourceDir,
+					SkillName:    "code-review",
+					Agent:        "github-copilot",
+					Scope:        "project",
+					ScopeChanged: true,
+					Dir:          targetDir,
+					GitClient:    &git.Client{RepoDir: t.TempDir()},
+				}
+			},
+			wantErr: "no standard skills found, but 1 skill(s) exist in hidden directories",
+		},
+		{
+			name:  "local hidden-dir skills included with --allow-hidden-dirs",
+			isTTY: false,
+			setup: func(t *testing.T, sourceDir, _ string) {
+				t.Helper()
+				writeLocalTestSkill(t, sourceDir, filepath.Join(".claude", "skills", "code-review"), heredoc.Doc(`
+					---
+					name: code-review
+					description: Reviews code
+					---
+					# Code Review
+				`))
+			},
+			opts: func(ios *iostreams.IOStreams, sourceDir, targetDir string) *InstallOptions {
+				t.Helper()
+				return &InstallOptions{
+					IO:              ios,
+					SkillSource:     sourceDir,
+					localPath:       sourceDir,
+					SkillName:       "code-review",
+					Force:           true,
+					Agent:           "github-copilot",
+					Scope:           "project",
+					ScopeChanged:    true,
+					Dir:             targetDir,
+					AllowHiddenDirs: true,
+					GitClient:       &git.Client{RepoDir: t.TempDir()},
+				}
+			},
+			wantStdout: "Installed code-review",
+			wantStderr: "Skills in hidden directories",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1889,11 +2289,12 @@ func TestRunLocalInstall(t *testing.T) {
 
 func Test_printReviewHint(t *testing.T) {
 	tests := []struct {
-		name       string
-		repo       string
-		sha        string
-		skillNames []string
-		wantOutput string
+		name            string
+		repo            string
+		sha             string
+		skillNames      []string
+		allowHiddenDirs bool
+		wantOutput      string
 	}{
 		{
 			name:       "remote install with SHA includes SHA in preview command",
@@ -1930,6 +2331,22 @@ func Test_printReviewHint(t *testing.T) {
 			skillNames: []string{},
 			wantOutput: "",
 		},
+		{
+			name:            "allow-hidden-dirs appends flag to preview command",
+			repo:            "owner/repo",
+			sha:             "abc123",
+			skillNames:      []string{"hidden-skill"},
+			allowHiddenDirs: true,
+			wantOutput:      "gh skill preview owner/repo hidden-skill@abc123 --allow-hidden-dirs",
+		},
+		{
+			name:            "allow-hidden-dirs without SHA",
+			repo:            "owner/repo",
+			sha:             "",
+			skillNames:      []string{"hidden-skill"},
+			allowHiddenDirs: true,
+			wantOutput:      "gh skill preview owner/repo hidden-skill --allow-hidden-dirs",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1937,11 +2354,92 @@ func Test_printReviewHint(t *testing.T) {
 			ios, _, _, _ := iostreams.Test()
 			cs := ios.ColorScheme()
 			var buf strings.Builder
-			printReviewHint(&buf, cs, tt.repo, tt.sha, tt.skillNames)
+			printReviewHint(&buf, cs, tt.repo, tt.sha, tt.skillNames, tt.allowHiddenDirs)
 			if tt.wantOutput == "" {
 				assert.Empty(t, buf.String())
 			} else {
 				assert.Contains(t, buf.String(), tt.wantOutput)
+			}
+		})
+	}
+}
+
+func Test_printHostHints(t *testing.T) {
+	kiro := &registry.AgentHost{ID: "kiro-cli", Name: "Kiro CLI", ProjectDir: ".kiro/skills", UserDir: ".kiro/skills"}
+	copilot := &registry.AgentHost{ID: "copilot-cli", Name: "GitHub Copilot CLI", ProjectDir: ".github/skills"}
+
+	tests := []struct {
+		name       string
+		hosts      []*registry.AgentHost
+		installed  []string
+		installDir string
+		gitRoot    string
+		wantSub    []string
+		wantNot    []string
+	}{
+		{
+			name:       "no installs produces no output",
+			hosts:      []*registry.AgentHost{kiro},
+			installed:  nil,
+			installDir: "/repo/.kiro/skills",
+			gitRoot:    "/repo",
+			wantNot:    []string{"Kiro CLI"},
+		},
+		{
+			name:       "non-kiro host produces no output",
+			hosts:      []*registry.AgentHost{copilot},
+			installed:  []string{"s1"},
+			installDir: "/repo/.github/skills",
+			gitRoot:    "/repo",
+			wantNot:    []string{"Kiro CLI"},
+		},
+		{
+			name:       "kiro project scope uses relative path",
+			hosts:      []*registry.AgentHost{kiro},
+			installed:  []string{"s1"},
+			installDir: filepath.Join("/repo", ".kiro", "skills"),
+			gitRoot:    "/repo",
+			wantSub:    []string{"Kiro CLI", `"skill://.kiro/skills/**/SKILL.md"`},
+		},
+		{
+			name:       "kiro user scope uses absolute install dir",
+			hosts:      []*registry.AgentHost{kiro},
+			installed:  []string{"s1"},
+			installDir: "/home/user/.kiro/skills",
+			gitRoot:    "/repo",
+			wantSub:    []string{`"skill:///home/user/.kiro/skills/**/SKILL.md"`},
+			wantNot:    []string{`skill://.kiro/skills`},
+		},
+		{
+			name:       "kiro custom dir outside git root uses absolute path",
+			hosts:      []*registry.AgentHost{kiro},
+			installed:  []string{"s1"},
+			installDir: "/tmp/my-skills",
+			gitRoot:    "/repo",
+			wantSub:    []string{`"skill:///tmp/my-skills/**/SKILL.md"`},
+		},
+		{
+			name:       "kiro without git root falls back to install dir",
+			hosts:      []*registry.AgentHost{kiro},
+			installed:  []string{"s1"},
+			installDir: "/home/user/.kiro/skills",
+			gitRoot:    "",
+			wantSub:    []string{`"skill:///home/user/.kiro/skills/**/SKILL.md"`},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ios, _, _, _ := iostreams.Test()
+			cs := ios.ColorScheme()
+			var buf strings.Builder
+			printHostHints(&buf, cs, tt.hosts, tt.installed, tt.installDir, tt.gitRoot)
+			got := buf.String()
+			for _, s := range tt.wantSub {
+				assert.Contains(t, got, s)
+			}
+			for _, s := range tt.wantNot {
+				assert.NotContains(t, got, s)
 			}
 		})
 	}
@@ -2163,4 +2661,214 @@ func TestInstallRun_TelemetryMultipleSkills(t *testing.T) {
 	assert.Len(t, names, 2)
 	assert.Contains(t, names, "code-review")
 	assert.Contains(t, names, "git-commit")
+}
+
+var republishedContent = heredoc.Doc(`
+	---
+	name: git-commit
+	description: Writes commits
+	metadata:
+	  github-repo: https://github.com/monalisa/original-skills
+	  github-tree-sha: upstreamTreeSHA
+	  github-path: skills/git-commit
+	---
+	# Git Commit
+`)
+
+func stubContentsAPI(reg *httpmock.Registry, owner, repo, path, content string) {
+	encoded := base64.StdEncoding.EncodeToString([]byte(content))
+	reg.Register(
+		httpmock.REST("GET", fmt.Sprintf("repos/%s/%s/contents/%s", owner, repo, path)),
+		httpmock.StringResponse(fmt.Sprintf(`{"content": %q, "encoding": "base64"}`, encoded)),
+	)
+}
+
+func TestInstallRun_UpstreamDetection(t *testing.T) {
+	tests := []struct {
+		name       string
+		isTTY      bool
+		stubs      func(*httpmock.Registry)
+		opts       func(t *testing.T, ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions
+		wantErr    string
+		wantStdout string
+		wantStderr string
+	}{
+		{
+			name:  "detects re-published skill and user picks re-publisher",
+			isTTY: true,
+			stubs: func(reg *httpmock.Registry) {
+				stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
+				stubDiscoverTree(reg, "monalisa", "skills-repo", "abc123",
+					singleSkillTreeJSON("git-commit", "treeSHA", "blobSHA"))
+				stubContentsAPI(reg, "monalisa", "skills-repo",
+					"skills/git-commit/SKILL.md", republishedContent)
+				stubInstallFiles(reg, "monalisa", "skills-repo",
+					"treeSHA", "blobSHA", republishedContent)
+			},
+			opts: func(t *testing.T, ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions {
+				return &InstallOptions{
+					IO:         ios,
+					HttpClient: func() (*http.Client, error) { return &http.Client{Transport: reg}, nil },
+					GitClient:  &git.Client{RepoDir: t.TempDir()},
+					Prompter: &prompter.PrompterMock{
+						SelectFunc: func(_ string, _ string, choices []string) (int, error) {
+							require.Len(t, choices, 2)
+							assert.Contains(t, choices[0], "monalisa/skills-repo")
+							assert.Contains(t, choices[1], "monalisa/original-skills")
+							return 0, nil
+						},
+					},
+					Telemetry:    &telemetry.NoOpService{},
+					SkillSource:  "monalisa/skills-repo",
+					SkillName:    "git-commit",
+					Agent:        "github-copilot",
+					Scope:        "project",
+					ScopeChanged: true,
+					Dir:          t.TempDir(),
+				}
+			},
+			wantStderr: "originally published in monalisa/original-skills",
+			wantStdout: "Installed git-commit",
+		},
+		{
+			name:  "detects re-published skill and user picks upstream",
+			isTTY: true,
+			stubs: func(reg *httpmock.Registry) {
+				stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
+				stubDiscoverTree(reg, "monalisa", "skills-repo", "abc123",
+					singleSkillTreeJSON("git-commit", "treeSHA", "blobSHA"))
+				stubContentsAPI(reg, "monalisa", "skills-repo",
+					"skills/git-commit/SKILL.md", republishedContent)
+				stubResolveVersion(reg, "monalisa", "original-skills", "v2.0.0", "upstream456")
+				stubDiscoverTree(reg, "monalisa", "original-skills", "upstream456",
+					singleSkillTreeJSON("git-commit", "upTreeSHA", "upBlobSHA"))
+				stubContentsAPI(reg, "monalisa", "original-skills",
+					"skills/git-commit/SKILL.md", gitCommitContent)
+				stubInstallFiles(reg, "monalisa", "original-skills",
+					"upTreeSHA", "upBlobSHA", gitCommitContent)
+			},
+			opts: func(t *testing.T, ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions {
+				return &InstallOptions{
+					IO:         ios,
+					HttpClient: func() (*http.Client, error) { return &http.Client{Transport: reg}, nil },
+					GitClient:  &git.Client{RepoDir: t.TempDir()},
+					Prompter: &prompter.PrompterMock{
+						SelectFunc: func(_ string, _ string, choices []string) (int, error) {
+							require.Len(t, choices, 2)
+							assert.Contains(t, choices[0], "monalisa/skills-repo")
+							assert.Contains(t, choices[1], "monalisa/original-skills")
+							return 1, nil
+						},
+					},
+					Telemetry:    &telemetry.NoOpService{},
+					SkillSource:  "monalisa/skills-repo",
+					SkillName:    "git-commit",
+					Agent:        "github-copilot",
+					Scope:        "project",
+					ScopeChanged: true,
+					Dir:          t.TempDir(),
+				}
+			},
+			wantStderr: "Redirecting install to monalisa/original-skills",
+			wantStdout: "Installed git-commit",
+		},
+		{
+			name:  "non-interactive defaults to re-publisher with notice",
+			isTTY: false,
+			stubs: func(reg *httpmock.Registry) {
+				stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
+				stubDiscoverTree(reg, "monalisa", "skills-repo", "abc123",
+					singleSkillTreeJSON("git-commit", "treeSHA", "blobSHA"))
+				stubContentsAPI(reg, "monalisa", "skills-repo",
+					"skills/git-commit/SKILL.md", republishedContent)
+				stubInstallFiles(reg, "monalisa", "skills-repo",
+					"treeSHA", "blobSHA", republishedContent)
+			},
+			opts: func(t *testing.T, ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions {
+				return &InstallOptions{
+					IO:           ios,
+					HttpClient:   func() (*http.Client, error) { return &http.Client{Transport: reg}, nil },
+					GitClient:    &git.Client{RepoDir: t.TempDir()},
+					Telemetry:    &telemetry.NoOpService{},
+					SkillSource:  "monalisa/skills-repo",
+					SkillName:    "git-commit",
+					Agent:        "github-copilot",
+					Scope:        "project",
+					ScopeChanged: true,
+					Dir:          t.TempDir(),
+				}
+			},
+			wantStderr: "use --upstream",
+			wantStdout: "Installed git-commit",
+		},
+		{
+			name:  "non-interactive with --upstream redirects to upstream",
+			isTTY: false,
+			stubs: func(reg *httpmock.Registry) {
+				stubResolveVersion(reg, "monalisa", "skills-repo", "v1.0.0", "abc123")
+				stubDiscoverTree(reg, "monalisa", "skills-repo", "abc123",
+					singleSkillTreeJSON("git-commit", "treeSHA", "blobSHA"))
+				stubContentsAPI(reg, "monalisa", "skills-repo",
+					"skills/git-commit/SKILL.md", republishedContent)
+				stubResolveVersion(reg, "monalisa", "original-skills", "v2.0.0", "upstream456")
+				stubDiscoverTree(reg, "monalisa", "original-skills", "upstream456",
+					singleSkillTreeJSON("git-commit", "upTreeSHA", "upBlobSHA"))
+				stubContentsAPI(reg, "monalisa", "original-skills",
+					"skills/git-commit/SKILL.md", gitCommitContent)
+				stubInstallFiles(reg, "monalisa", "original-skills",
+					"upTreeSHA", "upBlobSHA", gitCommitContent)
+			},
+			opts: func(t *testing.T, ios *iostreams.IOStreams, reg *httpmock.Registry) *InstallOptions {
+				return &InstallOptions{
+					IO:           ios,
+					HttpClient:   func() (*http.Client, error) { return &http.Client{Transport: reg}, nil },
+					GitClient:    &git.Client{RepoDir: t.TempDir()},
+					Telemetry:    &telemetry.NoOpService{},
+					SkillSource:  "monalisa/skills-repo",
+					SkillName:    "git-commit",
+					Agent:        "github-copilot",
+					Scope:        "project",
+					ScopeChanged: true,
+					Dir:          t.TempDir(),
+					Upstream:     true,
+				}
+			},
+			wantStderr: "Redirecting install to monalisa/original-skills",
+			wantStdout: "Installed git-commit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			tt.stubs(reg)
+
+			homeDir := t.TempDir()
+			t.Setenv("HOME", homeDir)
+			t.Setenv("USERPROFILE", homeDir)
+
+			ios, _, stdout, stderr := iostreams.Test()
+			ios.SetStdoutTTY(tt.isTTY)
+			ios.SetStdinTTY(tt.isTTY)
+			ios.SetStderrTTY(tt.isTTY)
+			opts := tt.opts(t, ios, reg)
+
+			err := installRun(opts)
+
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			if tt.wantStdout != "" {
+				assert.Contains(t, stdout.String(), tt.wantStdout)
+			}
+			if tt.wantStderr != "" {
+				assert.Contains(t, stderr.String(), tt.wantStderr)
+			}
+		})
+	}
 }

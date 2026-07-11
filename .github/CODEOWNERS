@@ -14,5 +14,5 @@ test/integration/attestation-cmd @cli/package-security @cli/code-reviewers
 
 pkg/cmd/attestation/verification/embed/tuf-repo.github.com/ @cli/tuf-root-reviewers @cli/code-reviewers
 
-pkg/cmd/skills/ @cli/skill-reviewers @cli/code-reviewers
-internal/skills/ @cli/skill-reviewers @cli/code-reviewers
+pkg/cmd/skills/ @cli/skills @cli/code-reviewers
+internal/skills/ @cli/skills @cli/code-reviewers

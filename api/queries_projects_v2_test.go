@@ -318,6 +318,21 @@ func TestProjectsV2IgnorableError(t *testing.T) {
 			expectOut: true,
 		},
 		{
+			name:      "resource not accessible by integration",
+			errMsg:    "Resource not accessible by integration",
+			expectOut: true,
+		},
+		{
+			name:      "resource not accessible by personal access token",
+			errMsg:    "Resource not accessible by personal access token",
+			expectOut: true,
+		},
+		{
+			name:      "resource not accessible by integration with path context",
+			errMsg:    "GraphQL: Resource not accessible by integration (repository.pullRequest.projectItems.nodes.0)",
+			expectOut: true,
+		},
+		{
 			name:      "other error",
 			errMsg:    "some other graphql error message",
 			expectOut: false,

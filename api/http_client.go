@@ -86,13 +86,57 @@ func NewHTTPClient(opts HTTPClientOptions) (*http.Client, error) {
 	return client, nil
 }
 
+// ExternalHTTPClientOptions holds options for creating an external HTTP client.
+type ExternalHTTPClientOptions struct {
+	AppVersion  string
+	Log         io.Writer
+	LogColorize bool
+	Transport   http.RoundTripper
+}
+
+// NewExternalHTTPClient creates an HTTP client for talking to non-GitHub hosts.
+// It includes debug logging and a User-Agent header but does not attach any
+// authentication tokens or GitHub-specific headers.
+func NewExternalHTTPClient(opts ExternalHTTPClientOptions) (*http.Client, error) {
+	clientOpts := ghAPI.ClientOptions{
+		Host:               "none",
+		AuthToken:          "none",
+		LogIgnoreEnv:       true,
+		SkipDefaultHeaders: true,
+		Transport:          opts.Transport,
+	}
+
+	debugEnabled, debugValue := utils.IsDebugEnabled()
+	logVerboseHTTP := false
+	if strings.Contains(debugValue, "api") {
+		logVerboseHTTP = true
+	}
+
+	if logVerboseHTTP || debugEnabled {
+		clientOpts.Log = opts.Log
+		clientOpts.LogColorize = opts.LogColorize
+		clientOpts.LogVerboseHTTP = logVerboseHTTP
+	}
+
+	clientOpts.Headers = map[string]string{
+		userAgent: fmt.Sprintf("GitHub CLI %s", opts.AppVersion),
+	}
+
+	client, err := ghAPI.NewHTTPClient(clientOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	return client, nil
+}
+
 func NewCachedHTTPClient(httpClient *http.Client, ttl time.Duration) *http.Client {
 	newClient := *httpClient
 	newClient.Transport = AddCacheTTLHeader(httpClient.Transport, ttl)
 	return &newClient
 }
 
-// AddCacheTTLHeader adds an header to the request telling the cache that the request
+// AddCacheTTLHeader adds a header to the request telling the cache that the request
 // should be cached for a specified amount of time.
 func AddCacheTTLHeader(rt http.RoundTripper, ttl time.Duration) http.RoundTripper {
 	return &funcTripper{roundTrip: func(req *http.Request) (*http.Response, error) {

@@ -184,7 +184,7 @@ func Test_statusRun(t *testing.T) {
 				  X Failed to log in to ghe.io account monalisa-ghe (GH_CONFIG_DIR/hosts.yml)
 				  - Active account: true
 				  - The token in GH_CONFIG_DIR/hosts.yml is invalid.
-				  - To re-authenticate, run: gh auth login -h ghe.io
+				  - To re-authenticate, run: gh auth refresh -h ghe.io
 				  - To forget about this account, run: gh auth logout -h ghe.io -u monalisa-ghe
 			`),
 		},
@@ -229,7 +229,7 @@ func Test_statusRun(t *testing.T) {
 				  X Failed to log in to ghe.io account monalisa-ghe (GH_CONFIG_DIR/hosts.yml)
 				  - Active account: true
 				  - The token in GH_CONFIG_DIR/hosts.yml is invalid.
-				  - To re-authenticate, run: gh auth login -h ghe.io
+				  - To re-authenticate, run: gh auth refresh -h ghe.io
 				  - To forget about this account, run: gh auth logout -h ghe.io -u monalisa-ghe
 			`),
 		},
@@ -447,7 +447,7 @@ func Test_statusRun(t *testing.T) {
 				  X Failed to log in to ghe.io account monalisa-ghe (GH_CONFIG_DIR/hosts.yml)
 				  - Active account: false
 				  - The token in GH_CONFIG_DIR/hosts.yml is invalid.
-				  - To re-authenticate, run: gh auth login -h ghe.io
+				  - To re-authenticate, run: gh auth refresh -h ghe.io
 				  - To forget about this account, run: gh auth logout -h ghe.io -u monalisa-ghe
 			`),
 		},
@@ -535,7 +535,7 @@ func Test_statusRun(t *testing.T) {
 				  X Failed to log in to ghe.io account monalisa-ghe-2 (GH_CONFIG_DIR/hosts.yml)
 				  - Active account: true
 				  - The token in GH_CONFIG_DIR/hosts.yml is invalid.
-				  - To re-authenticate, run: gh auth login -h ghe.io
+				  - To re-authenticate, run: gh auth refresh -h ghe.io
 				  - To forget about this account, run: gh auth logout -h ghe.io -u monalisa-ghe-2
 			`),
 		},

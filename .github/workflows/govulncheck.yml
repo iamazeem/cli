@@ -1,7 +1,7 @@
 name: Go Vulnerability Check
 on:
   schedule:
-    - cron: "0 0 * * 1" # Every Monday at midnight UTC
+    - cron: "0 0 * * *" # Every day at midnight UTC
   workflow_dispatch:
 
 jobs:
@@ -12,10 +12,10 @@ jobs:
       security-events: write
     steps:
       - name: Check out code
-        uses: actions/checkout@v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: 'go.mod'
 
@@ -26,6 +26,6 @@ jobs:
           go run golang.org/x/vuln/cmd/govulncheck@d1f380186385b4f64e00313f31743df8e4b89a77 -format sarif ./... > gh.sarif
 
       - name: Upload SARIF report
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
         with:
           sarif_file: gh.sarif

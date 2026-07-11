@@ -86,13 +86,15 @@ func TestNewCmdPublish(t *testing.T) {
 		wantsOpts PublishOptions
 	}{
 		{
-			name: "all flags",
-			cli:  "./monalisa-skills --dry-run --fix --tag v1.0.0",
+			name:     "fix and dry-run are mutually exclusive",
+			cli:      "./monalisa-skills --dry-run --fix --tag v1.0.0",
+			wantsErr: true,
+		},
+		{
+			name: "fix flag only",
+			cli:  "--fix",
 			wantsOpts: PublishOptions{
-				Dir:    "./monalisa-skills",
-				DryRun: true,
-				Fix:    true,
-				Tag:    "v1.0.0",
+				Fix: true,
 			},
 		},
 		{
@@ -169,7 +171,7 @@ func TestPublishRun_UnsupportedHost(t *testing.T) {
 		HttpClient: func() (*http.Client, error) { return nil, nil },
 		host:       "acme.ghes.com",
 	})
-	require.ErrorContains(t, err, "supports only github.com")
+	require.ErrorContains(t, err, "does not currently support GitHub Enterprise Server")
 }
 
 func TestPublishRun(t *testing.T) {
@@ -457,6 +459,7 @@ func TestPublishRun(t *testing.T) {
 				return &PublishOptions{IO: ios, Dir: dir, Fix: true}
 			},
 			wantStdout: "stripped install metadata",
+			wantStderr: "Fixed 1 file(s). Review and commit the changes",
 			verify: func(t *testing.T, dir string) {
 				t.Helper()
 				fixed, err := os.ReadFile(filepath.Join(dir, "skills", "test-skill", "SKILL.md"))

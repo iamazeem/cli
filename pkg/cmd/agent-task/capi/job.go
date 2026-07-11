@@ -35,12 +35,12 @@ type Job struct {
 }
 
 type JobActor struct {
-	ID    int    `json:"id"`
+	ID    int64  `json:"id"`
 	Login string `json:"login"`
 }
 
 type JobPullRequest struct {
-	ID      int    `json:"id"`
+	ID      int64  `json:"id"`
 	Number  int    `json:"number"`
 	BaseRef string `json:"base_ref,omitempty"`
 }
@@ -127,7 +127,7 @@ func (c *CAPIClient) CreateJob(ctx context.Context, owner, repo, problemStatemen
 	return &j, nil
 }
 
-// GetJob retrieves a agent job
+// GetJob retrieves an agent job
 func (c *CAPIClient) GetJob(ctx context.Context, owner, repo, jobID string) (*Job, error) {
 	if owner == "" || repo == "" || jobID == "" {
 		return nil, errors.New("owner, repo, and jobID are required")

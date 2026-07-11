@@ -170,6 +170,19 @@ func FetchRefSHA(ctx context.Context, httpClient *http.Client, repo ghrepo.Inter
 	return ref.Object.SHA, nil
 }
 
+// DigestAlgForRef returns the digest algorithm name corresponding to the given
+// git ref SHA. SHA-1 git object IDs are 40 hex characters and SHA-256 git
+// object IDs are 64 hex characters. Unknown lengths default to "sha1" to
+// preserve backwards-compatible behavior.
+func DigestAlgForRef(digest string) string {
+	switch len(digest) {
+	case 64:
+		return "sha256"
+	default:
+		return "sha1"
+	}
+}
+
 // FetchRelease finds a published repository release by its tagName, or a draft release by its pending tag name.
 func FetchRelease(ctx context.Context, httpClient *http.Client, repo ghrepo.Interface, tagName string) (*Release, error) {
 	cc, cancel := context.WithCancel(ctx)
@@ -188,15 +201,27 @@ func FetchRelease(ctx context.Context, httpClient *http.Client, repo ghrepo.Inte
 		results <- fetchResult{release: release, error: err}
 	}()
 
-	res := <-results
-	if errors.Is(res.error, ErrReleaseNotFound) {
-		res = <-results
-		cancel() // satisfy the linter even though no goroutines are running anymore
-	} else {
+	// Prefer a release found by either lookup. A single failed lookup, such as
+	// the draft lookup when unauthenticated, must not mask a release found by
+	// the other; only report an error when both lookups fail.
+	first := <-results
+	if first.error == nil {
 		cancel()
 		<-results // drain the channel
+		return first.release, nil
 	}
-	return res.release, res.error
+
+	second := <-results
+	cancel() // satisfy the linter even though no goroutines are running anymore
+	if second.error == nil {
+		return second.release, nil
+	}
+
+	// Both lookups failed; prefer reporting the release as not found.
+	if errors.Is(second.error, ErrReleaseNotFound) {
+		return nil, second.error
+	}
+	return nil, first.error
 }
 
 // FetchLatestRelease finds the latest published release for a repository.

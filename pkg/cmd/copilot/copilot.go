@@ -18,10 +18,11 @@ import (
 	"strings"
 
 	"github.com/MakeNowJust/heredoc"
+	"github.com/cli/cli/v2/internal/ci"
 	"github.com/cli/cli/v2/internal/config"
+	"github.com/cli/cli/v2/internal/gh/ghtelemetry"
 	"github.com/cli/cli/v2/internal/prompter"
 	"github.com/cli/cli/v2/internal/safepaths"
-	"github.com/cli/cli/v2/internal/update"
 	ghzip "github.com/cli/cli/v2/internal/zip"
 	"github.com/cli/cli/v2/pkg/cmdutil"
 	"github.com/cli/cli/v2/pkg/iostreams"
@@ -37,7 +38,7 @@ type CopilotOptions struct {
 	Remove      bool
 }
 
-func NewCmdCopilot(f *cmdutil.Factory, runF func(*CopilotOptions) error) *cobra.Command {
+func NewCmdCopilot(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, runF func(*CopilotOptions) error) *cobra.Command {
 	opts := &CopilotOptions{
 		IO:         f.IOStreams,
 		HttpClient: f.HttpClient,
@@ -80,6 +81,8 @@ func NewCmdCopilot(f *cmdutil.Factory, runF func(*CopilotOptions) error) *cobra.
 		`),
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			telemetry.SetSampleRate(ghtelemetry.SAMPLE_ALL)
+
 			stopParsePos := -1
 			for i, arg := range args {
 				if arg == "--" {
@@ -139,8 +142,9 @@ func runCopilot(opts *CopilotOptions) error {
 		return nil
 	}
 
-	copilotPath := findCopilotBinary()
-	if copilotPath == "" {
+	copilotPath := findCopilotBinaryFunc()
+	foundInPath := copilotPath != ""
+	if !foundInPath {
 		if opts.IO.CanPrompt() {
 			confirmed, err := opts.Prompter.Confirm("GitHub Copilot CLI is not installed. Would you like to install it?", true)
 			if err != nil {
@@ -150,7 +154,7 @@ func runCopilot(opts *CopilotOptions) error {
 				fmt.Fprintf(opts.IO.ErrOut, "%s Copilot CLI was not installed", opts.IO.ColorScheme().WarningIcon())
 				return cmdutil.SilentError
 			}
-		} else if !update.IsCI() {
+		} else if !ci.IsCI() {
 			fmt.Fprintf(opts.IO.ErrOut, "%s Copilot CLI not installed", opts.IO.ColorScheme().WarningIcon())
 			return cmdutil.SilentError
 		}
@@ -172,11 +176,17 @@ func runCopilot(opts *CopilotOptions) error {
 	externalCmd.Stderr = opts.IO.ErrOut
 	externalCmd.Env = append(os.Environ(), "COPILOT_GH=true")
 
-	if err := externalCmd.Run(); err != nil {
+	if err := runExternalCmdFunc(externalCmd); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			// We terminate with os.Exit here, preserving the exit code from Copilot CLI,
 			// and also preventing stdio writes by callers up the stack.
 			os.Exit(exitErr.ExitCode())
+		}
+		if foundInPath {
+			// We found a `copilot` binary but exec failed, possibly due to
+			// unusual characters in the path (see https://github.com/cli/cli/issues/13106).
+			// Suggest running copilot directly as a workaround.
+			return fmt.Errorf("%w\nFailed to run '%s', try running `copilot` directly without `gh`.", err, copilotPath)
 		}
 		return err
 	}
@@ -196,6 +206,14 @@ func copilotBinaryPath() string {
 	}
 	return filepath.Join(copilotInstallDir(), binaryName)
 }
+
+var runExternalCmdFunc = runExternalCmd
+
+func runExternalCmd(cmd *exec.Cmd) error {
+	return cmd.Run()
+}
+
+var findCopilotBinaryFunc = findCopilotBinary
 
 // findCopilotBinary returns the path to the Copilot CLI binary, if installed,
 // with the following order of precedence:

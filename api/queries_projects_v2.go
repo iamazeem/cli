@@ -9,12 +9,13 @@ import (
 )
 
 const (
-	errorProjectsV2ReadScope         = "field requires one of the following scopes: ['read:project']"
-	errorProjectsV2UserField         = "Field 'projectsV2' doesn't exist on type 'User'"
-	errorProjectsV2RepositoryField   = "Field 'projectsV2' doesn't exist on type 'Repository'"
-	errorProjectsV2OrganizationField = "Field 'projectsV2' doesn't exist on type 'Organization'"
-	errorProjectsV2IssueField        = "Field 'projectItems' doesn't exist on type 'Issue'"
-	errorProjectsV2PullRequestField  = "Field 'projectItems' doesn't exist on type 'PullRequest'"
+	errorProjectsV2ReadScope             = "field requires one of the following scopes: ['read:project']"
+	errorProjectsV2UserField             = "Field 'projectsV2' doesn't exist on type 'User'"
+	errorProjectsV2RepositoryField       = "Field 'projectsV2' doesn't exist on type 'Repository'"
+	errorProjectsV2OrganizationField     = "Field 'projectsV2' doesn't exist on type 'Organization'"
+	errorProjectsV2IssueField            = "Field 'projectItems' doesn't exist on type 'Issue'"
+	errorProjectsV2PullRequestField      = "Field 'projectItems' doesn't exist on type 'PullRequest'"
+	errorProjectsV2ResourceNotAccessible = "Resource not accessible by"
 )
 
 type ProjectV2 struct {
@@ -321,10 +322,11 @@ func CurrentUserProjectsV2(client *Client, hostname string) ([]ProjectV2, error)
 }
 
 // When querying ProjectsV2 fields we generally don't want to show the user
-// scope errors and field does not exist errors. ProjectsV2IgnorableError
-// checks against known error strings to see if an error can be safely ignored.
-// Due to the fact that the GraphQLClient can return multiple types of errors
-// this uses brittle string comparison to check against the known error strings.
+// scope errors, field does not exist errors, or authorization errors.
+// ProjectsV2IgnorableError checks against known error strings to see if an
+// error can be safely ignored. Due to the fact that the GraphQLClient can
+// return multiple types of errors this uses brittle string comparison to check
+// against the known error strings.
 func ProjectsV2IgnorableError(err error) bool {
 	msg := err.Error()
 	if strings.Contains(msg, errorProjectsV2ReadScope) ||
@@ -332,7 +334,8 @@ func ProjectsV2IgnorableError(err error) bool {
 		strings.Contains(msg, errorProjectsV2RepositoryField) ||
 		strings.Contains(msg, errorProjectsV2OrganizationField) ||
 		strings.Contains(msg, errorProjectsV2IssueField) ||
-		strings.Contains(msg, errorProjectsV2PullRequestField) {
+		strings.Contains(msg, errorProjectsV2PullRequestField) ||
+		strings.Contains(msg, errorProjectsV2ResourceNotAccessible) {
 		return true
 	}
 	return false

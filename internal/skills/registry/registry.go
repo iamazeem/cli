@@ -2,6 +2,7 @@ package registry
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -30,11 +31,22 @@ const (
 
 	DefaultAgentID = "github-copilot"
 
+	claudeConfigDirEnv = "CLAUDE_CONFIG_DIR"
+
 	sharedProjectSkillsDir = ".agents/skills"
 )
 
 // Agents contains all known agent hosts.
+//
+// The slice is ordered so that the most widely used agents appear first,
+// followed by the rest in alphabetical order. This order is used for
+// interactive selection, help output, and flag enum suggestions.
+//
+// Agents sharing a ProjectDir (such as the shared .agents/skills directory)
+// install skills to the same project-scope location, so selecting multiple
+// such agents writes each skill only once.
 var Agents = []AgentHost{
+	// Popular agents, listed first for discoverability.
 	{
 		ID:         "github-copilot",
 		Name:       "GitHub Copilot",
@@ -60,16 +72,271 @@ var Agents = []AgentHost{
 		UserDir:    ".codex/skills",
 	},
 	{
-		ID:         "gemini",
+		ID:         "gemini-cli",
 		Name:       "Gemini CLI",
 		ProjectDir: sharedProjectSkillsDir,
 		UserDir:    ".gemini/skills",
 	},
+
+	// Antigravity documents three surfaces that share the .agents/skills
+	// project dir but each read user-scope skills from a different global
+	// dir. Each UserDir below is the global path from that surface's docs.
 	{
+		// https://antigravity.google/docs/ide/skills
 		ID:         "antigravity",
 		Name:       "Antigravity",
 		ProjectDir: sharedProjectSkillsDir,
 		UserDir:    ".gemini/antigravity/skills",
+	},
+	{
+		// https://antigravity.google/docs/cli/plugins#agent-skills
+		ID:         "antigravity-cli",
+		Name:       "Antigravity CLI",
+		ProjectDir: sharedProjectSkillsDir,
+		UserDir:    ".gemini/antigravity-cli/skills",
+	},
+	{
+		// https://antigravity.google/docs/skills
+		ID:         "antigravity2.0",
+		Name:       "Antigravity 2.0",
+		ProjectDir: sharedProjectSkillsDir,
+		UserDir:    ".gemini/config/skills",
+	},
+
+	// All other supported agents, alphabetical by ID.
+	{
+		ID:         "adal",
+		Name:       "AdaL",
+		ProjectDir: ".adal/skills",
+		UserDir:    ".adal/skills",
+	},
+	{
+		ID:         "amp",
+		Name:       "Amp",
+		ProjectDir: sharedProjectSkillsDir,
+		UserDir:    ".config/agents/skills",
+	},
+	{
+		ID:         "augment",
+		Name:       "Augment",
+		ProjectDir: ".augment/skills",
+		UserDir:    ".augment/skills",
+	},
+	{
+		ID:         "bob",
+		Name:       "IBM Bob",
+		ProjectDir: ".bob/skills",
+		UserDir:    ".bob/skills",
+	},
+	{
+		ID:         "cline",
+		Name:       "Cline",
+		ProjectDir: sharedProjectSkillsDir,
+		UserDir:    ".agents/skills",
+	},
+	{
+		ID:         "codebuddy",
+		Name:       "CodeBuddy",
+		ProjectDir: ".codebuddy/skills",
+		UserDir:    ".codebuddy/skills",
+	},
+	{
+		ID:         "command-code",
+		Name:       "Command Code",
+		ProjectDir: ".commandcode/skills",
+		UserDir:    ".commandcode/skills",
+	},
+	{
+		ID:         "continue",
+		Name:       "Continue",
+		ProjectDir: ".continue/skills",
+		UserDir:    ".continue/skills",
+	},
+	{
+		ID:         "cortex",
+		Name:       "Cortex Code",
+		ProjectDir: ".cortex/skills",
+		UserDir:    ".snowflake/cortex/skills",
+	},
+	{
+		ID:         "crush",
+		Name:       "Crush",
+		ProjectDir: ".crush/skills",
+		UserDir:    ".config/crush/skills",
+	},
+	{
+		ID:         "deepagents",
+		Name:       "Deep Agents",
+		ProjectDir: sharedProjectSkillsDir,
+		UserDir:    ".deepagents/agent/skills",
+	},
+	{
+		ID:         "droid",
+		Name:       "Droid",
+		ProjectDir: ".factory/skills",
+		UserDir:    ".factory/skills",
+	},
+	{
+		ID:         "firebender",
+		Name:       "Firebender",
+		ProjectDir: sharedProjectSkillsDir,
+		UserDir:    ".firebender/skills",
+	},
+	{
+		ID:         "goose",
+		Name:       "Goose",
+		ProjectDir: ".goose/skills",
+		UserDir:    ".config/goose/skills",
+	},
+	{
+		ID:         "iflow-cli",
+		Name:       "iFlow CLI",
+		ProjectDir: ".iflow/skills",
+		UserDir:    ".iflow/skills",
+	},
+	{
+		ID:         "junie",
+		Name:       "Junie",
+		ProjectDir: ".junie/skills",
+		UserDir:    ".junie/skills",
+	},
+	{
+		ID:         "kilo",
+		Name:       "Kilo Code",
+		ProjectDir: ".kilocode/skills",
+		UserDir:    ".kilocode/skills",
+	},
+	{
+		ID:         "kimi-cli",
+		Name:       "Kimi Code CLI",
+		ProjectDir: sharedProjectSkillsDir,
+		UserDir:    ".config/agents/skills",
+	},
+	{
+		ID:         "kiro-cli",
+		Name:       "Kiro CLI",
+		ProjectDir: ".kiro/skills",
+		UserDir:    ".kiro/skills",
+	},
+	{
+		ID:         "kode",
+		Name:       "Kode",
+		ProjectDir: ".kode/skills",
+		UserDir:    ".kode/skills",
+	},
+	{
+		ID:         "mcpjam",
+		Name:       "MCPJam",
+		ProjectDir: ".mcpjam/skills",
+		UserDir:    ".mcpjam/skills",
+	},
+	{
+		ID:         "mistral-vibe",
+		Name:       "Mistral Vibe",
+		ProjectDir: ".vibe/skills",
+		UserDir:    ".vibe/skills",
+	},
+	{
+		ID:         "mux",
+		Name:       "Mux",
+		ProjectDir: ".mux/skills",
+		UserDir:    ".mux/skills",
+	},
+	{
+		ID:         "neovate",
+		Name:       "Neovate",
+		ProjectDir: ".neovate/skills",
+		UserDir:    ".neovate/skills",
+	},
+	{
+		ID:         "openclaw",
+		Name:       "OpenClaw",
+		ProjectDir: "skills",
+		UserDir:    ".openclaw/skills",
+	},
+	{
+		ID:         "opencode",
+		Name:       "OpenCode",
+		ProjectDir: sharedProjectSkillsDir,
+		UserDir:    ".config/opencode/skills",
+	},
+	{
+		ID:         "openhands",
+		Name:       "OpenHands",
+		ProjectDir: ".openhands/skills",
+		UserDir:    ".openhands/skills",
+	},
+	{
+		ID:         "pi",
+		Name:       "Pi",
+		ProjectDir: ".pi/skills",
+		UserDir:    ".pi/agent/skills",
+	},
+	{
+		ID:         "pochi",
+		Name:       "Pochi",
+		ProjectDir: ".pochi/skills",
+		UserDir:    ".pochi/skills",
+	},
+	{
+		ID:         "qoder",
+		Name:       "Qoder",
+		ProjectDir: ".qoder/skills",
+		UserDir:    ".qoder/skills",
+	},
+	{
+		ID:         "qwen-code",
+		Name:       "Qwen Code",
+		ProjectDir: ".qwen/skills",
+		UserDir:    ".qwen/skills",
+	},
+	{
+		ID:         "replit",
+		Name:       "Replit",
+		ProjectDir: sharedProjectSkillsDir,
+		UserDir:    ".config/agents/skills",
+	},
+	{
+		ID:         "roo",
+		Name:       "Roo Code",
+		ProjectDir: ".roo/skills",
+		UserDir:    ".roo/skills",
+	},
+	{
+		ID:         "trae",
+		Name:       "Trae",
+		ProjectDir: ".trae/skills",
+		UserDir:    ".trae/skills",
+	},
+	{
+		ID:         "trae-cn",
+		Name:       "Trae CN",
+		ProjectDir: ".trae/skills",
+		UserDir:    ".trae-cn/skills",
+	},
+	{
+		ID:         "universal",
+		Name:       "Universal",
+		ProjectDir: sharedProjectSkillsDir,
+		UserDir:    sharedProjectSkillsDir,
+	},
+	{
+		ID:         "warp",
+		Name:       "Warp",
+		ProjectDir: sharedProjectSkillsDir,
+		UserDir:    ".agents/skills",
+	},
+	{
+		ID:         "windsurf",
+		Name:       "Windsurf",
+		ProjectDir: ".windsurf/skills",
+		UserDir:    ".codeium/windsurf/skills",
+	},
+	{
+		ID:         "zencoder",
+		Name:       "Zencoder",
+		ProjectDir: ".zencoder/skills",
+		UserDir:    ".zencoder/skills",
 	},
 }
 
@@ -95,6 +362,15 @@ func AgentIDs() []string {
 		ids[i] = h.ID
 	}
 	return ids
+}
+
+// AgentHelpList returns a newline-separated bulleted list of agents for help text.
+func AgentHelpList() string {
+	lines := make([]string, len(Agents))
+	for i, h := range Agents {
+		lines[i] = fmt.Sprintf("  - %s (%s)", h.Name, h.ID)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // AgentNames returns the display names of all agents for prompting.
@@ -133,6 +409,11 @@ func (h *AgentHost) InstallDir(scope Scope, gitRoot, homeDir string) (string, er
 		}
 		return filepath.Join(gitRoot, h.ProjectDir), nil
 	case ScopeUser:
+		if h.ID == "claude-code" {
+			if configDir := os.Getenv(claudeConfigDirEnv); configDir != "" {
+				return filepath.Join(configDir, "skills"), nil
+			}
+		}
 		if homeDir == "" {
 			return "", fmt.Errorf("could not determine home directory")
 		}

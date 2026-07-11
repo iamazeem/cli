@@ -861,7 +861,7 @@ func Test_createRun(t *testing.T) {
 						{ "filename": "template1",
 						  "body": "this is a bug" },
 						{ "filename": "template2",
-						  "body": "this is a enhancement" }
+						  "body": "this is an enhancement" }
 					] } } }`))
 				reg.Register(
 					httpmock.GraphQL(`mutation PullRequestCreate\b`),
@@ -1092,7 +1092,7 @@ func Test_createRun(t *testing.T) {
 					{ "filename": "template1",
 					  "body": "this is a bug" },
 					{ "filename": "template2",
-					  "body": "this is a enhancement" }
+					  "body": "this is an enhancement" }
 				] } } }`),
 				)
 				reg.Register(

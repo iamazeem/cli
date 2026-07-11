@@ -32,9 +32,10 @@ type PreviewOptions struct {
 	ExecutablePath string
 	RenderFile     func(string, string) string
 
-	RepoArg   string
-	SkillName string
-	Version   string // resolved from @suffix on SkillName
+	RepoArg         string
+	SkillName       string
+	Version         string // resolved from @suffix on SkillName
+	AllowHiddenDirs bool   // include skills in dot-prefixed directories
 
 	repo ghrepo.Interface
 }
@@ -68,6 +69,12 @@ func NewCmdPreview(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, ru
 			When run with only a repository argument, lists available skills and
 			prompts for selection.
 
+			The skill argument can be a name, a namespaced name (%[1]sauthor/skill%[1]s),
+			or an exact path within the repository (%[1]sskills/author/skill%[1]s,
+			%[1]spackages/agent-skills/code-review%[1]s, or any %[1]s.../SKILL.md%[1]s path).
+			Namespaced names with one slash are matched by name. Use a %[1]sSKILL.md%[1]s
+			suffix to force a one-directory path outside the standard conventions.
+
 			To preview a specific version of the skill, append %[1]s@VERSION%[1]s to the
 			skill name. The version is resolved as a git tag, branch, or commit SHA.
 		`, "`"),
@@ -80,6 +87,9 @@ func NewCmdPreview(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, ru
 
 			# Preview a skill at a specific commit SHA
 			$ gh skill preview github/awesome-copilot documentation-writer@abc123def456
+
+			# Preview from a non-standard nested path (efficient, skips full discovery)
+			$ gh skill preview monalisa/skills-repo packages/agent-skills/code-review
 
 			# Browse and preview interactively
 			$ gh skill preview github/awesome-copilot
@@ -109,6 +119,8 @@ func NewCmdPreview(f *cmdutil.Factory, telemetry ghtelemetry.CommandRecorder, ru
 			return previewRun(opts)
 		},
 	}
+
+	cmd.Flags().BoolVar(&opts.AllowHiddenDirs, "allow-hidden-dirs", false, "Include skills in hidden directories (e.g. .claude/skills/, .agents/skills/)")
 
 	return cmd
 }
@@ -150,20 +162,36 @@ func previewRun(opts *PreviewOptions) error {
 		return fmt.Errorf("could not resolve version: %w", err)
 	}
 
-	opts.IO.StartProgressIndicatorWithLabel("Discovering skills")
-	skills, err := discovery.DiscoverSkills(apiClient, hostname, owner, repoName, resolved.SHA)
-	opts.IO.StopProgressIndicator()
-	if err != nil {
-		return err
-	}
+	var skill discovery.Skill
+	if discovery.IsSkillPath(opts.SkillName) {
+		opts.IO.StartProgressIndicatorWithLabel("Looking up skill")
+		found, err := discovery.DiscoverSkillByPathWithOptions(apiClient, hostname, owner, repoName, resolved.SHA, opts.SkillName, discovery.DiscoverSkillByPathOptions{SkipDescription: true})
+		opts.IO.StopProgressIndicator()
+		if err != nil {
+			return err
+		}
+		skill = *found
+	} else {
+		opts.IO.StartProgressIndicatorWithLabel("Discovering skills")
+		allSkills, err := discovery.DiscoverSkillsWithOptions(apiClient, hostname, owner, repoName, resolved.SHA, discovery.DiscoverOptions{})
+		opts.IO.StopProgressIndicator()
+		if err != nil {
+			return err
+		}
 
-	sort.Slice(skills, func(i, j int) bool {
-		return skills[i].DisplayName() < skills[j].DisplayName()
-	})
+		skills, err := filterHiddenDirSkills(opts, allSkills)
+		if err != nil {
+			return err
+		}
 
-	skill, err := selectSkill(opts, skills)
-	if err != nil {
-		return err
+		sort.Slice(skills, func(i, j int) bool {
+			return skills[i].DisplayName() < skills[j].DisplayName()
+		})
+
+		skill, err = selectSkill(opts, skills)
+		if err != nil {
+			return err
+		}
 	}
 
 	opts.IO.StartProgressIndicatorWithLabel("Fetching skill content")
@@ -388,10 +416,50 @@ func isMarkdownFile(filePath string) bool {
 	}
 }
 
+// filterHiddenDirSkills applies the --allow-hidden-dirs flag logic. When the
+// flag is set, all skills are returned with a warning. Otherwise, hidden-dir
+// skills are excluded with a hint or error.
+func filterHiddenDirSkills(opts *PreviewOptions, allSkills []discovery.Skill) ([]discovery.Skill, error) {
+	cs := opts.IO.ColorScheme()
+
+	if opts.AllowHiddenDirs {
+		if discovery.HasHiddenDirSkills(allSkills) {
+			fmt.Fprint(opts.IO.ErrOut, heredoc.Docf(`
+				%[1]s Skills in hidden directories (e.g. .claude/, .agents/) may be installed
+				  copies from another publisher. Verify the skill's origin and check for a
+				  canonical source.
+			`, cs.WarningIcon()))
+		}
+		return allSkills, nil
+	}
+
+	r := discovery.PartitionHiddenDirSkills(allSkills)
+	if r.HiddenCount > 0 {
+		if len(r.Standard) == 0 {
+			return nil, fmt.Errorf(
+				"no standard skills found, but %d skill(s) exist in hidden directories\n"+
+					"  Use --allow-hidden-dirs to include them",
+				r.HiddenCount,
+			)
+		}
+		fmt.Fprintf(opts.IO.ErrOut, "%s %d skill(s) in hidden directories were excluded, use --%s to include them\n",
+			cs.Yellow("!"), r.HiddenCount, "allow-hidden-dirs")
+	}
+
+	return r.Standard, nil
+}
+
 func selectSkill(opts *PreviewOptions, skills []discovery.Skill) (discovery.Skill, error) {
 	if opts.SkillName != "" {
 		for _, s := range skills {
 			if s.DisplayName() == opts.SkillName || s.Name == opts.SkillName {
+				return s, nil
+			}
+		}
+		// Fall back to InstallName so that namespaced identifiers produced
+		// by the post-install hint (e.g. "namespace/skill") are accepted.
+		for _, s := range skills {
+			if s.InstallName() == opts.SkillName {
 				return s, nil
 			}
 		}

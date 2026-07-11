@@ -100,7 +100,7 @@ To install:
 ```bash
 sudo dnf install dnf5-plugins
 sudo dnf config-manager addrepo --from-repofile=https://cli.github.com/packages/rpm/gh-cli.repo
-sudo dnf install gh --repo gh-cli
+sudo dnf install gh
 ```
 
 To upgrade:
@@ -119,7 +119,7 @@ To install:
 ```bash
 sudo dnf install 'dnf-command(config-manager)'
 sudo dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
-sudo dnf install gh --repo gh-cli
+sudo dnf install gh
 ```
 
 To upgrade:
@@ -165,7 +165,7 @@ sudo zypper update gh
 
 [Homebrew](https://brew.sh/) is a free and open-source software package management system that simplifies the installation of software on Apple's operating system, macOS, as well as Linux.
 
-The [GitHub CLI formulae](https://formulae.brew.sh/formula/gh) is supported by the GitHub CLI maintainers with help from our friends at Homebrew with updated powered by [homebrew/hoomebrew-core](https://github.com/Homebrew/homebrew-core/blob/main/Formula/g/gh.rb).
+The [GitHub CLI formulae](https://formulae.brew.sh/formula/gh) is supported by the GitHub CLI maintainers with help from our friends at Homebrew with updates powered by [homebrew/homebrew-core](https://github.com/Homebrew/homebrew-core/blob/main/Formula/g/gh.rb).
 
 To install:
 
@@ -466,7 +466,7 @@ The [GitHub CLI package](https://webinstall.dev/gh/) is supported by the Webi co
 To install:
 
 ```shell
-curl -sS https://webi.sh/gh \| sh
+curl -sS https://webi.sh/gh | sh
 ```
 
 To upgrade:

@@ -1,5 +1,6 @@
 # Publish dry-run from a directory with no skills/ should fail gracefully
-! exec gh skill publish --dry-run $WORK
+mkdir $WORK/empty-dir
+! exec gh skill publish --dry-run $WORK/empty-dir
 stderr 'no skills found in'
 
 # Publish dry-run against a valid skill directory should succeed
@@ -8,10 +9,6 @@ stdout 'hello-world'
 
 # Publish dry-run with --tag
 exec gh skill publish --dry-run --tag v1.0.0 $WORK/test-repo
-stdout 'hello-world'
-
-# Publish dry-run with --fix
-exec gh skill publish --dry-run --fix $WORK/test-repo
 stdout 'hello-world'
 
 -- test-repo/skills/hello-world/SKILL.md --

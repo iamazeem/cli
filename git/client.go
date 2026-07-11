@@ -106,7 +106,7 @@ func (c *Client) Command(ctx context.Context, args ...string) (*Command, error) 
 // It is only usable when constructed by another function in the package because the empty pattern,
 // without allMatching set to true, will result in an error in AuthenticatedCommand.
 //
-// Callers can currently opt-in to an slightly less secure mode for backwards compatibility by using
+// Callers can currently opt-in to a slightly less secure mode for backwards compatibility by using
 // AllMatchingCredentialsPattern.
 type CredentialPattern struct {
 	allMatching bool // should only be constructable via AllMatchingCredentialsPattern

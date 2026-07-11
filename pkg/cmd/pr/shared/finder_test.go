@@ -327,25 +327,6 @@ func TestFind(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "number only",
-			args: args{
-				selector:   "13",
-				fields:     []string{"number"},
-				baseRepoFn: stubBaseRepoFn(ghrepo.New("ORIGINOWNER", "REPO"), nil),
-				branchFn: func() (string, error) {
-					return "blueberries", nil
-				},
-				gitConfigClient: stubGitConfigClient{
-					readBranchConfigFn:  stubBranchConfig(git.BranchConfig{}, nil),
-					pushDefaultFn:       stubPushDefault(git.PushDefaultSimple, nil),
-					remotePushDefaultFn: stubRemotePushDefault("", nil),
-				},
-			},
-			httpStub: nil,
-			wantPR:   13,
-			wantRepo: "https://github.com/ORIGINOWNER/REPO",
-		},
-		{
 			name: "pr number zero",
 			args: args{
 				selector:   "0",

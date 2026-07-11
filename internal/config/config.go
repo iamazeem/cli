@@ -580,7 +580,7 @@ color_labels: disabled
 accessible_colors: disabled
 # Whether an accessible prompter should be used. Supported values: enabled, disabled
 accessible_prompter: disabled
-# Whether to use a animated spinner as a progress indicator. If disabled, a textual progress indicator is used instead. Supported values: enabled, disabled
+# Whether to use an animated spinner as a progress indicator. If disabled, a textual progress indicator is used instead. Supported values: enabled, disabled
 spinner: enabled
 `
 
@@ -681,7 +681,7 @@ var Options = []ConfigOption{
 	},
 	{
 		Key:           spinnerKey,
-		Description:   "whether to use a animated spinner as a progress indicator",
+		Description:   "whether to use an animated spinner as a progress indicator",
 		DefaultValue:  "enabled",
 		AllowedValues: []string{"enabled", "disabled"},
 		CurrentValue: func(c gh.Config, hostname string) string {
